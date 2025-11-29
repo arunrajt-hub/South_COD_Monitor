@@ -1,0 +1,62 @@
+name: Flipkart Myntra DN Analysis
+
+# This workflow runs the Flipkart & Myntra Q2 DN Analysis script
+on:
+  schedule:
+    # Run every 12 hours (at minute 0 of every 12th hour)
+    - cron: '0 */12 * * *'
+  
+  # Allow manual triggering from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  flipkart-myntra-dn-analysis:
+    name: Run Flipkart Myntra DN Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Setup Google Service Account
+      env:
+        SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+      run: |
+        echo "$SERVICE_ACCOUNT_JSON" > service_account_key.json
+        # Verify the file was created (without exposing contents)
+        if [ -f service_account_key.json ]; then
+          echo "Service account key file created successfully"
+        else
+          echo "ERROR: Service account key file was not created"
+          exit 1
+        fi
+    
+    - name: Run Flipkart Myntra DN Analysis Script
+      env:
+        PYTHONUNBUFFERED: 1
+      run: |
+        python flipkart_myntra_dn_analysis.py
+    
+    - name: Upload logs and artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: flipkart-myntra-dn-analysis-logs
+        path: |
+          *.log
+          *.txt
+        retention-days: 7
+        if-no-files-found: ignore
+
