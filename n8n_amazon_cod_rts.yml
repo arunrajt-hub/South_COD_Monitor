@@ -1,0 +1,54 @@
+name: Trigger Amazon COD RTS Workflow
+
+# This workflow triggers Amazon COD RTS workflow every 8 hours
+on:
+  schedule:
+    # Run every 8 hours (at minute 0 of every 8th hour)
+    - cron: '0 */8 * * *'
+  
+  # Allow manual triggering from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  trigger-amazon-cod-rts:
+    name: Trigger Amazon COD RTS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Trigger Amazon COD RTS Workflow
+      env:
+        N8N_BASE_URL: ${{ secrets.N8N_BASE_URL }}
+        AMAZON_COD_RTS_WEBHOOK_PATH: ${{ secrets.AMAZON_COD_RTS_WEBHOOK_PATH }}
+      run: |
+        if [ -z "$N8N_BASE_URL" ]; then
+          echo "ERROR: N8N_BASE_URL secret is not set"
+          echo "Please add your n8n base URL (e.g., https://abc123.ngrok.io) as a GitHub secret"
+          exit 1
+        fi
+        
+        # Use default path if not set
+        webhook_path="${AMAZON_COD_RTS_WEBHOOK_PATH:-amazon-cod-rts-trigger}"
+        webhook_url="${N8N_BASE_URL}/webhook/${webhook_path}"
+        
+        echo "Triggering Amazon COD RTS workflow..."
+        echo "Webhook URL: $webhook_url"
+        
+        response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "$webhook_url" \
+          -H "Content-Type: application/json" \
+          -d '{"triggered_by": "github_actions", "workflow": "Amazon_COD_RTS_Automation_WO_Whatsapp", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}')
+        
+        http_status=$(echo "$response" | grep "HTTP_STATUS:" | cut -d: -f2)
+        body=$(echo "$response" | sed '/HTTP_STATUS:/d')
+        
+        echo "Response Status: $http_status"
+        echo "Response Body: $body"
+        
+        if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+          echo "✅ Amazon COD RTS workflow triggered successfully!"
+          exit 0
+        else
+          echo "❌ Failed to trigger Amazon COD RTS workflow. HTTP Status: $http_status"
+          exit 1
+        fi
+
