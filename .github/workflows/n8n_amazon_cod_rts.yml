@@ -27,9 +27,12 @@ jobs:
           exit 1
         fi
         
+        # Remove trailing slash from base URL if present
+        base_url=$(echo "$N8N_BASE_URL" | sed 's:/*$::')
+        
         # Use default path if not set
         webhook_path="${AMAZON_COD_RTS_WEBHOOK_PATH:-amazon-cod-rts-trigger}"
-        webhook_url="${N8N_BASE_URL}/webhook/${webhook_path}"
+        webhook_url="${base_url}/webhook/${webhook_path}"
         
         echo "Triggering Amazon COD RTS workflow..."
         echo "Webhook URL: $webhook_url"
