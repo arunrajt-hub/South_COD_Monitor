@@ -33,7 +33,9 @@ jobs:
           exit 1
         fi
         
-        webhook_url="${N8N_BASE_URL}/webhook/${ACTIVE_EMAIL_WEBHOOK_PATH}"
+        # Remove trailing slash from base URL if present
+        base_url=$(echo "$N8N_BASE_URL" | sed 's:/*$::')
+        webhook_url="${base_url}/webhook/${ACTIVE_EMAIL_WEBHOOK_PATH}"
         
         echo "Triggering 4D Active Email workflow..."
         echo "Webhook URL: $webhook_url"
