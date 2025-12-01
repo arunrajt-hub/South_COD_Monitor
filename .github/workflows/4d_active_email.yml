@@ -1,0 +1,64 @@
+name: 4D Active Email Automation
+
+# This workflow runs the 4D Active Email script every 24 hours (once per day)
+on:
+  schedule:
+    # Run once daily at 9:00 AM UTC (2:30 PM IST)
+    - cron: '0 9 * * *'
+  
+  # Allow manual triggering from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  send-4d-active-email:
+    name: Send 4D Active Email
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_4d_active_email.txt
+    
+    - name: Setup Google Service Account
+      env:
+        SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+      run: |
+        echo "$SERVICE_ACCOUNT_JSON" > service_account_key.json
+        # Verify the file was created (without exposing contents)
+        if [ -f service_account_key.json ]; then
+          echo "Service account key file created successfully"
+        else
+          echo "ERROR: Service account key file was not created"
+          exit 1
+        fi
+    
+    - name: Run 4D Active Email Script
+      env:
+        GMAIL_SENDER_EMAIL: ${{ secrets.GMAIL_SENDER_EMAIL }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        PYTHONUNBUFFERED: 1
+      run: |
+        python 4d_active_email.py
+    
+    - name: Upload logs and artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: 4d-active-email-logs
+        path: |
+          *.log
+          *.txt
+        retention-days: 7
+        if-no-files-found: ignore
+
