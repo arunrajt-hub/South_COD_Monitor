@@ -36,13 +36,20 @@ SHEET_CONFIGS = [
         'worksheets': [
             "IMD Myntra 02"  # IMD Myntra Master Tracker December 2025
         ]
+    },
+    {
+        'sheet_id': "1FFa2Vp5QB8Hx7klp6vGD-hcwj9a3OnbQ0JBKBK2Fa4c",
+        'worksheets': [
+            "BRSNR Data"  # BRSNR Data sheet
+        ]
     }
 ]
 
 # Legacy configuration for backward compatibility
 GOOGLE_SHEET_ID = "1vEXO1TGn2S9gJ8kzSkCO9M-eiZoyCYFDwjMmVskkERo"
 WORKSHEET_NAMES = [
-    "IMD Myntra 02"
+    "IMD Myntra 02",
+    "BRSNR Data"
 ]
 
 # Analysis Configuration
@@ -282,7 +289,7 @@ class Q2DNAnalyzer:
         # Make a copy
         df_clean = df.copy()
         
-        # Handle different column names for Value (Value, Final Amount)
+        # Handle different column names for Value (Value, Final Amount, TotalPrice)
         if 'Value' in df_clean.columns:
             df_clean['Value'] = pd.to_numeric(
                 df_clean['Value'], 
@@ -293,29 +300,54 @@ class Q2DNAnalyzer:
                 df_clean['Final Amount'], 
                 errors='coerce'
             ).fillna(0)
+        elif 'TotalPrice' in df_clean.columns:
+            df_clean['Value'] = pd.to_numeric(
+                df_clean['TotalPrice'], 
+                errors='coerce'
+            ).fillna(0)
         
-        # Handle different column names for Tracking ID (TrackingID, TID, Tracking Number)
+        # Handle different column names for Tracking ID (TrackingID, TID, Tracking Number, ShipmentID, ShipmentId)
         if 'TrackingID' not in df_clean.columns:
             if 'TID' in df_clean.columns:
                 df_clean['TrackingID'] = df_clean['TID']
             elif 'Tracking Number' in df_clean.columns:
                 df_clean['TrackingID'] = df_clean['Tracking Number']
+            elif 'ShipmentId' in df_clean.columns:
+                df_clean['TrackingID'] = df_clean['ShipmentId']
+            elif 'ShipmentID' in df_clean.columns:
+                df_clean['TrackingID'] = df_clean['ShipmentID']
         
-        # Handle different column names for Hub Name (Hub Name, Hub Name as per ERP, Mapped hub)
+        # Handle different column names for Hub Name (Hub Name, Hub Name as per ERP, Mapped hub, CurrentHub)
         if 'Hub Name' not in df_clean.columns:
             if 'Hub Name as per ERP' in df_clean.columns:
                 df_clean['Hub Name'] = df_clean['Hub Name as per ERP']
             elif 'Mapped hub' in df_clean.columns:
                 df_clean['Hub Name'] = df_clean['Mapped hub']
+            elif 'CurrentHub' in df_clean.columns:
+                df_clean['Hub Name'] = df_clean['CurrentHub']
         
         # Handle different column names for Ops Remarks (Ops Remarks, Remarks)
-        if 'Ops Remarks' not in df_clean.columns and 'Remarks' in df_clean.columns:
-            df_clean['Ops Remarks'] = df_clean['Remarks']
+        # For BRSNR Data: "Form filled status" = "NO" means missing Ops Remarks
+        if 'Ops Remarks' not in df_clean.columns:
+            if 'Remarks' in df_clean.columns:
+                df_clean['Ops Remarks'] = df_clean['Remarks']
+            elif 'Form filled status' in df_clean.columns:
+                # Convert "Form filled status" to Ops Remarks: "NO" = missing, others = filled
+                df_clean['Ops Remarks'] = df_clean['Form filled status'].apply(
+                    lambda x: '' if str(x).strip().upper() == 'NO' else 'Filled'
+                )
+            else:
+                # Create empty Ops Remarks column if none exists
+                df_clean['Ops Remarks'] = ''
+        
+        # Create Image Proof column if it doesn't exist (for sheets that don't have it)
+        if 'Image Proof' not in df_clean.columns:
+            df_clean['Image Proof'] = ''
         
         # Clean text columns (including alternative column names)
-        text_columns = ['Loss Type', 'Reject Reason', 'Hub Name', 'Hub Name as per ERP', 'Mapped hub',
-                        'Region', 'LSN State', 'Pln_Owner', 'TrackingID', 'TID', 'Tracking Number',
-                        'Ops Remarks', 'Remarks', 'Image Proof']
+        text_columns = ['Loss Type', 'Reject Reason', 'Hub Name', 'Hub Name as per ERP', 'Mapped hub', 'CurrentHub',
+                        'Region', 'LSN State', 'Pln_Owner', 'TrackingID', 'TID', 'Tracking Number', 'ShipmentID', 'ShipmentId',
+                        'Ops Remarks', 'Remarks', 'Image Proof', 'Form filled status']
         for col in text_columns:
             if col in df_clean.columns:
                 df_clean[col] = df_clean[col].astype(str).str.strip()
@@ -472,38 +504,56 @@ class Q2DNAnalyzer:
                     hub_data = df_south_hubs[df_south_hubs['normalized_hub'] == normalized_hub]
                     
                     # Missing Ops Remarks
-                    missing_ops = hub_data[
-                        (hub_data['Ops Remarks'].isna()) | 
-                        (hub_data['Ops Remarks'].astype(str).str.strip() == '') |
-                        (hub_data['Ops Remarks'].astype(str).str.strip().str.lower() == 'nan')
-                    ]
-                    missing_ops_count = len(missing_ops)
+                    if 'Ops Remarks' in hub_data.columns:
+                        missing_ops = hub_data[
+                            (hub_data['Ops Remarks'].isna()) | 
+                            (hub_data['Ops Remarks'].astype(str).str.strip() == '') |
+                            (hub_data['Ops Remarks'].astype(str).str.strip().str.lower() == 'nan')
+                        ]
+                        missing_ops_count = len(missing_ops)
+                    else:
+                        missing_ops_count = 0
                     missing_ops_pct = round((missing_ops_count / count * 100) if count > 0 else 0)
                     
                     # Missing Image Proof
-                    missing_image = hub_data[
-                        (hub_data['Image Proof'].isna()) | 
-                        (hub_data['Image Proof'].astype(str).str.strip() == '') |
-                        (hub_data['Image Proof'].astype(str).str.strip().str.lower() == 'nan')
-                    ]
-                    missing_image_count = len(missing_image)
+                    if 'Image Proof' in hub_data.columns:
+                        missing_image = hub_data[
+                            (hub_data['Image Proof'].isna()) | 
+                            (hub_data['Image Proof'].astype(str).str.strip() == '') |
+                            (hub_data['Image Proof'].astype(str).str.strip().str.lower() == 'nan')
+                        ]
+                        missing_image_count = len(missing_image)
+                    else:
+                        missing_image_count = 0
                     missing_image_pct = round((missing_image_count / count * 100) if count > 0 else 0)
                     
                     # Missing BOTH
-                    missing_both = hub_data[
-                        ((hub_data['Ops Remarks'].isna()) | 
-                         (hub_data['Ops Remarks'].astype(str).str.strip() == '') |
-                         (hub_data['Ops Remarks'].astype(str).str.strip().str.lower() == 'nan')) &
-                        ((hub_data['Image Proof'].isna()) | 
-                         (hub_data['Image Proof'].astype(str).str.strip() == '') |
-                         (hub_data['Image Proof'].astype(str).str.strip().str.lower() == 'nan'))
-                    ]
-                    missing_both_count = len(missing_both)
+                    if 'Ops Remarks' in hub_data.columns and 'Image Proof' in hub_data.columns:
+                        missing_both = hub_data[
+                            ((hub_data['Ops Remarks'].isna()) | 
+                             (hub_data['Ops Remarks'].astype(str).str.strip() == '') |
+                             (hub_data['Ops Remarks'].astype(str).str.strip().str.lower() == 'nan')) &
+                            ((hub_data['Image Proof'].isna()) | 
+                             (hub_data['Image Proof'].astype(str).str.strip() == '') |
+                             (hub_data['Image Proof'].astype(str).str.strip().str.lower() == 'nan'))
+                        ]
+                        missing_both_count = len(missing_both)
+                    elif 'Ops Remarks' in hub_data.columns:
+                        # If only Ops Remarks exists, missing_both = missing_ops
+                        missing_both_count = missing_ops_count
+                    else:
+                        missing_both_count = 0
                     missing_both_pct = round((missing_both_count / count * 100) if count > 0 else 0)
                     
                     # Calculate total value of records missing both Ops Remarks and Image Proof
                     # This is the Potential Debit amount (value that could be debited due to missing documentation)
-                    missing_both_amount = missing_both['Value'].sum() if 'Value' in missing_both.columns and len(missing_both) > 0 else 0
+                    if 'Ops Remarks' in hub_data.columns and 'Image Proof' in hub_data.columns:
+                        missing_both_amount = missing_both['Value'].sum() if 'Value' in missing_both.columns and len(missing_both) > 0 else 0
+                    elif 'Ops Remarks' in hub_data.columns:
+                        # If only Ops Remarks exists, use missing_ops amount
+                        missing_both_amount = missing_ops['Value'].sum() if 'Value' in missing_ops.columns and len(missing_ops) > 0 else 0
+                    else:
+                        missing_both_amount = 0
                     potential_debit = round(float(missing_both_amount))
                     
                     total_amount = round(float(hub_amounts.get(normalized_hub, 0)))
@@ -770,7 +820,12 @@ class Q2DNAnalyzer:
                     # Add rows
                     for sno, (idx, row) in enumerate(combined_missing_ops.iterrows(), start=1):
                         tracking_id = str(row.get('TrackingID', '')) if 'TrackingID' in row else ''
-                        hub_name = str(row.get('Hub Name', '')) if 'Hub Name' in row else ''
+                        # Handle NaN values - replace "nan" with empty string
+                        if pd.isna(row.get('TrackingID', '')) or str(tracking_id).strip().lower() == 'nan':
+                            tracking_id = ''
+                        else:
+                            tracking_id = str(tracking_id).strip()
+                        hub_name = str(row.get('Hub Name', '')).lower() if 'Hub Name' in row and pd.notna(row.get('Hub Name', '')) else ''
                         value = round(float(row.get('Value', 0))) if pd.notna(row.get('Value')) else 0
                         worksheet_name = str(row.get('Worksheet', ''))
                         ops_status = "False" if row.get('Ops_Remarks_Status', False) == False else "True"
@@ -1125,6 +1180,18 @@ class Q2DNAnalyzer:
             except Exception as e:
                 logging.warning(f"Error sending email: {e}")
             
+            # Send dashboard email with consolidated data
+            logging.info(f"\nSending dashboard email with consolidated data...")
+            try:
+                if all_analyses and all_dataframes:
+                    self.send_dashboard_email(all_analyses, all_dataframes)
+                else:
+                    logging.warning("No analysis data found - skipping dashboard email")
+            except Exception as e:
+                logging.warning(f"Error sending dashboard email: {e}")
+            except Exception as e:
+                logging.warning(f"Error sending email: {e}")
+            
             logging.info("Analysis completed successfully!")
             
         except Exception as e:
@@ -1198,7 +1265,15 @@ class Q2DNAnalyzer:
                     for hub_name in clm_hubs:
                         if pd.isna(hub_name):
                             continue
-                        hub_email = HUB_EMAIL.get(str(hub_name).strip(), '')
+                        hub_name_str = str(hub_name).strip()
+                        # Try exact match first
+                        hub_email = HUB_EMAIL.get(hub_name_str, '')
+                        # Try case-insensitive match if exact match fails
+                        if not hub_email:
+                            for key, email in HUB_EMAIL.items():
+                                if key.upper() == hub_name_str.upper():
+                                    hub_email = email
+                                    break
                         if hub_email:
                             hub_emails.append(hub_email)
                         else:
@@ -1221,7 +1296,9 @@ class Q2DNAnalyzer:
                     msg['From'] = EMAIL_CONFIG['sender_email']
                     msg['To'] = ', '.join(to_recipients)
                     msg['Cc'] = ', '.join(cc_recipients)
-                    msg['Subject'] = "DEC - Debit Note Alert - Missing Proof/Remarks"
+                    # Format date for subject (e.g., "01 Dec 2025")
+                    current_date = datetime.now().strftime('%d %b %Y')
+                    msg['Subject'] = f"DEC - Debit Note Alert - Missing Proof/Remarks - {current_date}"
                     
                     # Create HTML email body
                     html_body = f"""
@@ -1267,6 +1344,7 @@ class Q2DNAnalyzer:
                             <p style="margin-top: 10px;"><strong>View Full Reports:</strong></p>
                             <ul style="margin-top: 5px;">
                                 <li><a href="https://docs.google.com/spreadsheets/d/1vEXO1TGn2S9gJ8kzSkCO9M-eiZoyCYFDwjMmVskkERo/edit" style="color: #1a73e8; text-decoration: none;">IMD Myntra Master Tracker</a></li>
+                                <li><a href="https://docs.google.com/spreadsheets/d/1FFa2Vp5QB8Hx7klp6vGD-hcwj9a3OnbQ0JBKBK2Fa4c/edit" style="color: #1a73e8; text-decoration: none;">BRSNR Data</a></li>
                             </ul>
                         </div>
                         
@@ -1287,7 +1365,12 @@ class Q2DNAnalyzer:
                     # Add rows for this CLM
                     for sno, (idx, row) in enumerate(clm_data.iterrows(), start=1):
                         tracking_id = str(row.get('TrackingID', '')) if 'TrackingID' in row else ''
-                        hub_name = str(row.get('Hub Name', '')) if 'Hub Name' in row else ''
+                        # Handle NaN values - replace "nan" with empty string
+                        if pd.isna(row.get('TrackingID', '')) or str(tracking_id).strip().lower() == 'nan':
+                            tracking_id = ''
+                        else:
+                            tracking_id = str(tracking_id).strip()
+                        hub_name = str(row.get('Hub Name', '')).lower() if 'Hub Name' in row and pd.notna(row.get('Hub Name', '')) else ''
                         value = round(float(row.get('Value', 0))) if pd.notna(row.get('Value')) else 0
                         worksheet_name = str(row.get('Worksheet', ''))
                         ops_status = "False" if row.get('Ops_Remarks_Status', False) == False else "True"
@@ -1366,7 +1449,9 @@ class Q2DNAnalyzer:
             msg['From'] = EMAIL_CONFIG['sender_email']
             msg['To'] = EMAIL_CONFIG['recipient_email']
             msg['Cc'] = 'arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net'
-            msg['Subject'] = "DEC - Debit Note Alert - Missing Proof/Remarks"
+            # Format date for subject (e.g., "01 Dec 2025")
+            current_date = datetime.now().strftime('%d %b %Y')
+            msg['Subject'] = f"South - Debit Note Alert - Dashboard - {current_date}"
             
             # Calculate summary
             total_records = len(top50_df)
@@ -1470,7 +1555,12 @@ class Q2DNAnalyzer:
             # Add rows
             for sno, (idx, row) in enumerate(top50_df.iterrows(), start=1):
                 tracking_id = str(row.get('TrackingID', '')) if 'TrackingID' in row else ''
-                hub_name = str(row.get('Hub Name', '')) if 'Hub Name' in row else ''
+                # Handle NaN values - replace "nan" with empty string
+                if pd.isna(row.get('TrackingID', '')) or str(tracking_id).strip().lower() == 'nan':
+                    tracking_id = ''
+                else:
+                    tracking_id = str(tracking_id).strip()
+                hub_name = str(row.get('Hub Name', '')).lower() if 'Hub Name' in row and pd.notna(row.get('Hub Name', '')) else ''
                 value = round(float(row.get('Value', 0))) if pd.notna(row.get('Value')) else 0
                 worksheet_name = str(row.get('Worksheet', ''))
                 ops_status = "False" if row.get('Ops_Remarks_Status', False) == False else "True"
@@ -1511,6 +1601,7 @@ class Q2DNAnalyzer:
                     <p><strong>View Full Reports:</strong></p>
                     <ul style="margin-top: 5px;">
                         <li><a href="https://docs.google.com/spreadsheets/d/1vEXO1TGn2S9gJ8kzSkCO9M-eiZoyCYFDwjMmVskkERo/edit" style="color: #1a73e8; text-decoration: none;">IMD Myntra Master Tracker</a></li>
+                        <li><a href="https://docs.google.com/spreadsheets/d/1FFa2Vp5QB8Hx7klp6vGD-hcwj9a3OnbQ0JBKBK2Fa4c/edit" style="color: #1a73e8; text-decoration: none;">BRSNR Data</a></li>
                     </ul>
                 </div>
             </body>
@@ -1534,6 +1625,166 @@ class Q2DNAnalyzer:
             
         except Exception as e:
             logging.error(f"Error sending email: {e}")
+            import traceback
+            logging.error(f"Full error traceback:\n{traceback.format_exc()}")
+            raise
+    
+    def send_dashboard_email(self, all_analyses: Dict, all_dataframes: Dict):
+        """Send consolidated dashboard email with POTENTIAL DEBIT SUMMARY and Hub-wise analysis"""
+        try:
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = EMAIL_CONFIG['sender_email']
+            msg['To'] = EMAIL_CONFIG['recipient_email']
+            msg['Cc'] = 'arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net'
+            
+            # Format date for subject (e.g., "01 Dec 2025")
+            current_date = datetime.now().strftime('%d %b %Y')
+            msg['Subject'] = f"South - Debit Note Alert - Dashboard - {current_date}"
+            
+            # Get all worksheet names
+            all_worksheet_names = list(all_analyses.keys()) if all_analyses else list(all_dataframes.keys())
+            
+            # Calculate POTENTIAL DEBIT SUMMARY
+            total_cases_all = 0
+            total_missing_ops_all = 0
+            total_potential_debit_all = 0
+            
+            worksheet_summary_html = '<div class="summary"><h3>POTENTIAL DEBIT SUMMARY</h3><table><tr><th>Worksheet</th><th>Total Cases</th><th>Missing Ops Remarks</th><th>Potential Debit (₹)</th></tr>'
+            
+            for ws_name in all_worksheet_names:
+                worksheet_cases = 0
+                worksheet_missing_ops = 0
+                worksheet_debit = 0
+                
+                if ws_name in all_dataframes:
+                    df = all_dataframes[ws_name]
+                    worksheet_cases = len(df)
+                    
+                    if ws_name in all_analyses and 'by_south_zone_hub' in all_analyses[ws_name]:
+                        for hub, details in all_analyses[ws_name]['by_south_zone_hub'].items():
+                            worksheet_missing_ops += details.get('missing_ops_remarks_count', 0)
+                            worksheet_debit += details.get('potential_debit', 0)
+                
+                total_cases_all += worksheet_cases
+                total_missing_ops_all += worksheet_missing_ops
+                total_potential_debit_all += worksheet_debit
+                
+                worksheet_summary_html += f'<tr><td>{ws_name}</td><td>{int(worksheet_cases)}</td><td>{int(worksheet_missing_ops)}</td><td>₹{int(round(worksheet_debit)):,}</td></tr>'
+            
+            worksheet_summary_html += f'<tr style="font-weight: bold;"><td>TOTAL</td><td>{int(total_cases_all)}</td><td>{int(total_missing_ops_all)}</td><td>₹{int(round(total_potential_debit_all)):,}</td></tr>'
+            worksheet_summary_html += '</table></div>'
+            
+            # Calculate Hub-wise consolidated summary (across all worksheets)
+            hub_consolidated = {}
+            for ws_name in all_worksheet_names:
+                if ws_name in all_analyses and 'by_south_zone_hub' in all_analyses[ws_name]:
+                    for hub, details in all_analyses[ws_name]['by_south_zone_hub'].items():
+                        original_hub = details.get('original_hub_name', hub)
+                        if original_hub not in hub_consolidated:
+                            hub_consolidated[original_hub] = {
+                                'count': 0,
+                                'amount': 0,
+                                'missing_ops': 0,
+                                'missing_image': 0,
+                                'missing_both': 0,
+                                'potential_debit': 0,
+                                'clm': details.get('clm', 'Unknown'),
+                                'state': details.get('state', 'Unknown')
+                            }
+                        hub_consolidated[original_hub]['count'] += details.get('count', 0)
+                        hub_consolidated[original_hub]['amount'] += details.get('amount', 0)
+                        hub_consolidated[original_hub]['missing_ops'] += details.get('missing_ops_remarks_count', 0)
+                        hub_consolidated[original_hub]['missing_image'] += details.get('missing_image_proof_count', 0)
+                        hub_consolidated[original_hub]['missing_both'] += details.get('missing_both_count', 0)
+                        hub_consolidated[original_hub]['potential_debit'] += details.get('potential_debit', 0)
+            
+            # Create Hub-wise HTML table
+            hub_wise_html = ""
+            if hub_consolidated:
+                hub_wise_html = '<div class="summary"><h3>SOUTH ZONE HUB-WISE CONSOLIDATED ANALYSIS</h3><table><tr><th>Hub Name</th><th>CLM</th><th>State</th><th>Cases</th><th>Total Amount (₹)</th><th>Missing Ops Remarks</th><th>Missing Image Proof</th><th>Missing BOTH</th><th>Potential Debit (₹)</th></tr>'
+                
+                # Sort by amount descending
+                sorted_hubs = sorted(hub_consolidated.items(), key=lambda x: x[1]['amount'], reverse=True)
+                
+                for hub_name, details in sorted_hubs:
+                    missing_ops_pct = round((details['missing_ops'] / details['count'] * 100) if details['count'] > 0 else 0, 1)
+                    missing_image_pct = round((details['missing_image'] / details['count'] * 100) if details['count'] > 0 else 0, 1)
+                    missing_both_pct = round((details['missing_both'] / details['count'] * 100) if details['count'] > 0 else 0, 1)
+                    
+                    hub_wise_html += f'<tr><td>{hub_name}</td><td>{details["clm"]}</td><td>{details["state"]}</td><td>{int(details["count"])}</td><td>₹{int(details["amount"]):,}</td><td>{int(details["missing_ops"])} ({missing_ops_pct}%)</td><td>{int(details["missing_image"])} ({missing_image_pct}%)</td><td>{int(details["missing_both"])} ({missing_both_pct}%)</td><td>₹{int(details["potential_debit"]):,}</td></tr>'
+                
+                # Calculate totals
+                total_hub_count = sum(d['count'] for d in hub_consolidated.values())
+                total_hub_amount = sum(d['amount'] for d in hub_consolidated.values())
+                total_hub_missing_ops = sum(d['missing_ops'] for d in hub_consolidated.values())
+                total_hub_missing_image = sum(d['missing_image'] for d in hub_consolidated.values())
+                total_hub_missing_both = sum(d['missing_both'] for d in hub_consolidated.values())
+                total_hub_potential_debit = sum(d['potential_debit'] for d in hub_consolidated.values())
+                
+                total_missing_ops_pct = round((total_hub_missing_ops / total_hub_count * 100) if total_hub_count > 0 else 0, 1)
+                total_missing_image_pct = round((total_hub_missing_image / total_hub_count * 100) if total_hub_count > 0 else 0, 1)
+                total_missing_both_pct = round((total_hub_missing_both / total_hub_count * 100) if total_hub_count > 0 else 0, 1)
+                
+                hub_wise_html += f'<tr style="font-weight: bold;"><td>TOTAL</td><td></td><td></td><td>{int(total_hub_count)}</td><td>₹{int(total_hub_amount):,}</td><td>{int(total_hub_missing_ops)} ({total_missing_ops_pct}%)</td><td>{int(total_hub_missing_image)} ({total_missing_image_pct}%)</td><td>{int(total_hub_missing_both)} ({total_missing_both_pct}%)</td><td>₹{int(total_hub_potential_debit):,}</td></tr>'
+                hub_wise_html += '</table></div>'
+            
+            # Create HTML email body
+            html_body = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; font-size: 11px; }}
+                    .header {{ background-color: #f0f0f0; padding: 15px; border-radius: 5px; }}
+                    .header h2 {{ font-size: 16px; font-weight: bold; margin: 0 0 10px 0; }}
+                    .header p {{ font-size: 11px; margin: 5px 0; }}
+                    .summary {{ background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 10px 0; }}
+                    .summary h3 {{ font-size: 11px; font-weight: bold; margin: 0 0 10px 0; }}
+                    .summary p {{ font-size: 11px; margin: 5px 0; }}
+                    table {{ border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 11px; }}
+                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                    th {{ background-color: #4CAF50; color: white; font-size: 10px; font-weight: 600; }}
+                    td {{ font-size: 11px; }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h2>South Zone - Debit Note Dashboard</h2>
+                    <p><strong>Generated:</strong> {datetime.now().strftime('%d %B %Y at %H:%M:%S')}</p>
+                </div>
+                
+                {worksheet_summary_html}
+                
+                {hub_wise_html}
+                
+                <div style="margin-top: 20px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">
+                    <p><strong>View Full Reports:</strong></p>
+                    <ul style="margin-top: 5px;">
+                        <li><a href="https://docs.google.com/spreadsheets/d/1vEXO1TGn2S9gJ8kzSkCO9M-eiZoyCYFDwjMmVskkERo/edit" style="color: #1a73e8; text-decoration: none;">IMD Myntra Master Tracker</a></li>
+                        <li><a href="https://docs.google.com/spreadsheets/d/1FFa2Vp5QB8Hx7klp6vGD-hcwj9a3OnbQ0JBKBK2Fa4c/edit" style="color: #1a73e8; text-decoration: none;">BRSNR Data</a></li>
+                    </ul>
+                </div>
+            </body>
+            </html>
+            """
+            
+            # Attach HTML body to email
+            msg.attach(MIMEText(html_body, 'html'))
+            
+            # Send email
+            server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
+            server.starttls()
+            server.login(EMAIL_CONFIG['sender_email'], EMAIL_CONFIG['sender_password'])
+            recipients = [EMAIL_CONFIG['recipient_email'], 'arunraj@loadshare.net', 'rakib@loadshare.net', 'maligai.rasmeen@loadshare.net']
+            text = msg.as_string()
+            server.sendmail(EMAIL_CONFIG['sender_email'], recipients, text)
+            server.quit()
+            
+            logging.info(f"Dashboard email sent successfully to {EMAIL_CONFIG['recipient_email']}")
+            logging.info(f"Dashboard email CC'd to: arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net")
+            
+        except Exception as e:
+            logging.error(f"Error sending dashboard email: {e}")
             import traceback
             logging.error(f"Full error traceback:\n{traceback.format_exc()}")
             raise
