@@ -40,7 +40,7 @@ COLUMNS_TO_FETCH = [0, 18, 19, 20, 21, 22]  # Hub Name, removed State (index 1) 
 
 # Column names to find dynamically
 FE_AOP_COLUMN_NAME = "FE AOP"  # Column to replace "Peak HC"
-LATEST_HC_COLUMN_NAME = "4D Active (30th)"  # Column for Latest HC (30/11/2025) - might also be "Latest HC (30/11/2025)"
+LATEST_HC_COLUMN_NAME = "4D Active (3rd)"  # Column for Latest HC - can be "4D Active (3rd)", "4D Active (30th)", etc.
 
 # CLM Email Mapping (from Automatic_Untraceable_BRSNR_Googlesheet_Reports.py)
 CLM_EMAIL = {
@@ -187,15 +187,47 @@ def filter_columns_and_calculate_gap(data):
             fe_aop_idx = 2  # Default to index 2 (where Peak HC was)
             logger.warning(f"⚠️ Using default index {fe_aop_idx} for FE AOP")
         
-        # Find Latest HC column index (4D Active 30th or similar)
+        # Find Latest HC column index (4D Active 3rd, 30th, or similar)
         latest_hc_idx = None
+        # First, try to find exact match or partial match for "4D Active (3rd)" or "4D Active (30th)"
         for idx, header in enumerate(headers):
             if header:
                 header_lower = str(header).lower()
-                if LATEST_HC_COLUMN_NAME.lower() in header_lower or "30th" in header_lower or "30/11" in header_lower:
+                header_str = str(header)
+                # Check for "4D Active (3rd)", "4D Active (30th)", or any "4D Active" with date/number
+                if ("4d active" in header_lower and ("3rd" in header_lower or "30th" in header_lower or "30/11" in header_lower)) or \
+                   (LATEST_HC_COLUMN_NAME.lower() in header_lower):
                     latest_hc_idx = idx
                     logger.info(f"✅ Found Latest HC column '{header}' at index {idx}")
                     break
+        
+        # If not found, look for any "4D Active" column (prefer the one with highest number like 3rd, 2nd, 1st)
+        if latest_hc_idx is None:
+            # Find all "4D Active" columns and pick the one that appears to be latest (contains "3rd" or highest number)
+            candidate_indices = []
+            for idx, header in enumerate(headers):
+                if header:
+                    header_lower = str(header).lower()
+                    if "4d active" in header_lower:
+                        candidate_indices.append((idx, header))
+            
+            if candidate_indices:
+                # Prefer "3rd" over "2nd" over "1st", or any with number
+                for idx, header in candidate_indices:
+                    header_lower = str(header).lower()
+                    if "3rd" in header_lower:
+                        latest_hc_idx = idx
+                        logger.info(f"✅ Found Latest HC column '{header}' at index {idx} (matched '3rd')")
+                        break
+                    elif "2nd" in header_lower and latest_hc_idx is None:
+                        latest_hc_idx = idx
+                    elif "1st" in header_lower and latest_hc_idx is None:
+                        latest_hc_idx = idx
+                
+                # If still not found, use the first "4D Active" column found
+                if latest_hc_idx is None and candidate_indices:
+                    latest_hc_idx = candidate_indices[0][0]
+                    logger.info(f"✅ Found Latest HC column '{candidate_indices[0][1]}' at index {latest_hc_idx} (first '4D Active' found)")
         
         if latest_hc_idx is None:
             # Fallback: use index 18 (4D Active 30th)
@@ -308,29 +340,70 @@ def filter_columns_and_calculate_gap(data):
                     value = ""
                 filtered_row[header_name] = value
             
-            # Calculate GAP = FE AOP - Latest HC (30/11/2025)
+            # Calculate GAP = FE AOP - Latest HC (4D Active 3rd)
             try:
-                # Get FE AOP value
+                # Get FE AOP value - try from filtered_row first, then original row
                 fe_aop_value = 0
-                if fe_aop_idx is not None and fe_aop_idx < len(row):
+                fe_aop_header = None
+                # Find FE AOP header name
+                for header_name, col_idx in column_mapping.items():
+                    if col_idx == fe_aop_idx:
+                        fe_aop_header = header_name
+                        break
+                
+                # Try to get from filtered_row first (if already added)
+                if fe_aop_header and fe_aop_header in filtered_row:
+                    try:
+                        fe_aop_str = str(filtered_row[fe_aop_header]).strip() if filtered_row[fe_aop_header] else "0"
+                        fe_aop_value = float(fe_aop_str) if fe_aop_str else 0
+                    except (ValueError, TypeError):
+                        fe_aop_value = 0
+                # Fallback to original row
+                elif fe_aop_idx is not None and fe_aop_idx < len(row):
                     fe_aop_str = str(row[fe_aop_idx]).strip() if row[fe_aop_idx] else "0"
                     try:
                         fe_aop_value = float(fe_aop_str) if fe_aop_str else 0
                     except (ValueError, TypeError):
                         fe_aop_value = 0
                 
-                # Get Latest HC value
+                # Get Latest HC value - try from filtered_row first, then original row
                 latest_hc_value = 0
-                if latest_hc_idx is not None and latest_hc_idx < len(row):
+                latest_hc_header = None
+                # Find Latest HC header name
+                if latest_hc_idx is not None:
+                    for header_name, col_idx in column_mapping.items():
+                        if col_idx == latest_hc_idx:
+                            latest_hc_header = header_name
+                            break
+                    # If not in column_mapping, get from original headers
+                    if latest_hc_header is None and latest_hc_idx < len(headers):
+                        latest_hc_header = headers[latest_hc_idx]
+                
+                # Try to get from filtered_row first (if already added)
+                if latest_hc_header and latest_hc_header in filtered_row:
+                    try:
+                        latest_hc_str = str(filtered_row[latest_hc_header]).strip() if filtered_row[latest_hc_header] else "0"
+                        latest_hc_value = float(latest_hc_str) if latest_hc_str else 0
+                    except (ValueError, TypeError):
+                        latest_hc_value = 0
+                # Fallback to original row
+                elif latest_hc_idx is not None and latest_hc_idx < len(row):
                     latest_hc_str = str(row[latest_hc_idx]).strip() if row[latest_hc_idx] else "0"
                     try:
                         latest_hc_value = float(latest_hc_str) if latest_hc_str else 0
                     except (ValueError, TypeError):
                         latest_hc_value = 0
                 
-                # Calculate GAP
+                # Calculate GAP = FE AOP - Latest HC
                 gap = fe_aop_value - latest_hc_value
                 filtered_row["GAP"] = gap
+                
+                # Log for debugging (first row only)
+                if row_idx == 2:
+                    logger.info(f"🔍 GAP calculation example (row {row_idx}):")
+                    logger.info(f"   FE AOP: {fe_aop_value} (from column index {fe_aop_idx}, header: {fe_aop_header})")
+                    logger.info(f"   Latest HC: {latest_hc_value} (from column index {latest_hc_idx}, header: {latest_hc_header})")
+                    logger.info(f"   GAP: {gap}")
             except (ValueError, TypeError) as e:
                 logger.debug(f"⚠️ Could not calculate GAP for row {row_idx}: {e}")
                 filtered_row["GAP"] = 0
@@ -348,12 +421,34 @@ def filter_columns_and_calculate_gap(data):
             logger.warning("   2. Column indices match your data structure")
             logger.warning(f"   3. First data row: {data_rows[0] if data_rows else 'No rows'}")
         
-        # Sort by GAP in descending order (highest GAP first)
+        # Get Hub Name column header (first column)
+        hub_name_header = filtered_headers[0] if filtered_headers else None
+        
+        # Separate Total rows from non-Total rows
+        data_without_total = []
+        total_rows = []
+        for row in filtered_data:
+            hub_name_value = str(row.get(hub_name_header, "")).strip() if hub_name_header else ""
+            if hub_name_value and "total" in hub_name_value.lower():
+                total_rows.append(row)
+                logger.info(f"📌 Found 'Total' row: {hub_name_value} (will be added at the end)")
+            else:
+                data_without_total.append(row)
+        
+        if len(total_rows) > 0:
+            logger.info(f"✅ Separated {len(total_rows)} 'Total' row(s) - will be excluded from sorting but included at the end")
+        
+        # Sort by GAP in descending order (highest GAP first) - only non-Total rows
         try:
-            filtered_data.sort(key=lambda x: float(x.get("GAP", 0)) if isinstance(x.get("GAP"), (int, float)) else 0, reverse=True)
-            logger.info("✅ Sorted data by GAP (descending order)")
+            data_without_total.sort(key=lambda x: float(x.get("GAP", 0)) if isinstance(x.get("GAP"), (int, float)) else 0, reverse=True)
+            logger.info("✅ Sorted data by GAP (descending order, excluding Total rows)")
         except Exception as e:
             logger.warning(f"⚠️ Could not sort by GAP: {e}")
+        
+        # Combine sorted data with Total rows at the end
+        filtered_data = data_without_total + total_rows
+        if len(total_rows) > 0:
+            logger.info(f"✅ Added {len(total_rows)} 'Total' row(s) at the end of the table")
         
         return filtered_headers, filtered_data
     
