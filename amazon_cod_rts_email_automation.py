@@ -120,7 +120,7 @@ class AmazonCODRTSEmailAutomation:
             return False
     
     def get_station_email_mapping(self):
-        """Get station-to-email mapping from Google Sheets"""
+        """Get station-to-email mapping from Google Sheets (including Region)"""
         try:
             logging.info("📧 Fetching station-email mapping...")
             spreadsheet = self.client.open_by_key(SHEET_ID)
@@ -129,11 +129,12 @@ class AmazonCODRTSEmailAutomation:
             # Get all data
             data = worksheet.get_all_records()
             
-            # Build mapping dictionary
+            # Build mapping dictionary with structure: {station: {'emails': [...], 'region': '...'}}
             station_email_mapping = {}
             for row in data:
                 station = row.get('Station', '').strip()
                 email = row.get('Email', '').strip()
+                region = row.get('Region', '').strip()
                 
                 if station and email:
                     # Handle comma-separated emails
@@ -143,12 +144,16 @@ class AmazonCODRTSEmailAutomation:
                         emails = [email]
                     
                     if station not in station_email_mapping:
-                        station_email_mapping[station] = []
-                    station_email_mapping[station].extend(emails)
+                        station_email_mapping[station] = {'emails': [], 'region': region}
+                    
+                    station_email_mapping[station]['emails'].extend(emails)
+                    # Update region if not already set or if new row has region
+                    if region and not station_email_mapping[station]['region']:
+                        station_email_mapping[station]['region'] = region
             
-            # Remove duplicates
+            # Remove duplicate emails and ensure region is set
             for station in station_email_mapping:
-                station_email_mapping[station] = list(set(station_email_mapping[station]))
+                station_email_mapping[station]['emails'] = list(set(station_email_mapping[station]['emails']))
             
             logging.info(f"✅ Found {len(station_email_mapping)} stations with email mappings")
             return station_email_mapping
@@ -427,18 +432,30 @@ class AmazonCODRTSEmailAutomation:
         return html
     
     def group_data_by_category(self, data, station_email_mapping, station_field='Delivery_Station_Code'):
-        """Group data by station category and recipients"""
+        """Group data by station category and recipients (including Region)"""
         category_items = []
         
-        # Normalize email lists for each station
+        # Normalize email lists and regions for each station
         station_email_map = {}
-        for station, emails in station_email_mapping.items():
+        station_region_map = {}
+        for station, station_data in station_email_mapping.items():
+            if isinstance(station_data, dict):
+                emails = station_data.get('emails', [])
+                region = station_data.get('region', '')
+            else:
+                # Backward compatibility: if it's a list, treat as old format
+                emails = station_data if isinstance(station_data, list) else [station_data]
+                region = ''
+            
             if isinstance(emails, list):
                 email_str = ','.join(sorted(emails))
             else:
                 email_str = str(emails)
+            
             if email_str:
                 station_email_map[station] = email_str
+                if region:
+                    station_region_map[station] = region
         
         # Group stations by category and recipient set
         category_recipient_map = {}
@@ -452,13 +469,16 @@ class AmazonCODRTSEmailAutomation:
                     break
             
             if category and email_key:
-                key = f"{category}|{email_key}"
+                # Get region for this station
+                region = station_region_map.get(station, '')
+                key = f"{category}|{email_key}|{region}"
                 
                 if key not in category_recipient_map:
                     category_recipient_map[key] = {
                         'category': category,
                         'emails': email_key.split(','),
-                        'stations': []
+                        'stations': [],
+                        'region': region
                     }
                 
                 if station not in category_recipient_map[key]['stations']:
@@ -478,6 +498,7 @@ class AmazonCODRTSEmailAutomation:
                     station_data.append(row)
             
             if station_data and emails:
+                region = group.get('region', '')
                 category_items.append({
                     'category': category,
                     'emails': emails,
@@ -486,7 +507,8 @@ class AmazonCODRTSEmailAutomation:
                     'stationsString': ', '.join(stations),
                     'data': station_data,
                     'stationCount': len(stations),
-                    'emailCount': len(emails)
+                    'emailCount': len(emails),
+                    'region': region
                 })
         
         return category_items
@@ -861,9 +883,12 @@ class AmazonCODRTSEmailAutomation:
             
             # Get recipients from station "ALL" in email mapping (case-insensitive)
             all_recipients = []
-            for station, emails in station_email_mapping.items():
+            for station, station_data in station_email_mapping.items():
                 if station.upper() == 'ALL':
-                    all_recipients = emails
+                    if isinstance(station_data, dict):
+                        all_recipients = station_data.get('emails', [])
+                    else:
+                        all_recipients = station_data if isinstance(station_data, list) else [station_data]
                     break
             
             # If "ALL" station not found, fall back to fixed recipients
@@ -896,9 +921,16 @@ class AmazonCODRTSEmailAutomation:
             )
             
             emails_sent = 0
+            # Get today's date for subject
+            today = datetime.now().strftime('%d-%m-%Y')
+            
             for item in category_items:
                 html = self.create_high_value_html(item)
-                subject = f"Amazon - High Value - Ageing/Potential Loss - {item['category']}"
+                region = item.get('region', '')
+                if region:
+                    subject = f"Amazon - High Value - Ageing - {region} - {today}"
+                else:
+                    subject = f"Amazon - High Value - Ageing/Potential Loss - {item['category']} - {today}"
                 
                 if self.send_email(item['emails'], subject, html):
                     emails_sent += 1
@@ -926,9 +958,16 @@ class AmazonCODRTSEmailAutomation:
             )
             
             emails_sent = 0
+            # Get today's date for subject
+            today = datetime.now().strftime('%d-%m-%Y')
+            
             for item in category_items:
                 html = self.create_high_default_agents_html(item)
-                subject = f"Amazon - Defaulting Agents - {item['category']}"
+                region = item.get('region', '')
+                if region:
+                    subject = f"Amazon - Defaulting Agents - {region} - {today}"
+                else:
+                    subject = f"Amazon - Defaulting Agents - {item['category']} - {today}"
                 
                 if self.send_email(item['emails'], subject, html):
                     emails_sent += 1
