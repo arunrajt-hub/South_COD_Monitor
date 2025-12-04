@@ -1,0 +1,63 @@
+name: Amazon COD RTS Analysis
+
+# This workflow runs the Amazon COD RTS analysis script twice daily at 10 AM and 9 PM IST
+on:
+  schedule:
+    # Run twice daily (10 AM and 9 PM IST = 4:30 AM and 3:30 PM UTC)
+    - cron: '30 4,15 * * *'
+  
+  # Allow manual triggering from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  amazon-cod-rts-analysis:
+    name: Run Amazon COD RTS Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Setup Google Service Account
+      env:
+        SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+      run: |
+        echo "$SERVICE_ACCOUNT_JSON" > service_account_key.json
+        # Verify the file was created (without exposing contents)
+        if [ -f service_account_key.json ]; then
+          echo "Service account key file created successfully"
+        else
+          echo "ERROR: Service account key file was not created"
+          exit 1
+        fi
+    
+    - name: Run Amazon COD RTS Analysis and Email Automation
+      env:
+        GMAIL_SENDER_EMAIL: ${{ secrets.GMAIL_SENDER_EMAIL }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        PYTHONUNBUFFERED: 1
+      run: |
+        python amazon_cod_rts_email_automation.py
+    
+    - name: Upload logs and artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: amazon-cod-rts-analysis-logs
+        path: |
+          *.log
+          *.txt
+        retention-days: 7
+        if-no-files-found: ignore
+

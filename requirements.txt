@@ -2,7 +2,4 @@ gspread>=5.0.0
 google-auth>=2.0.0
 pandas>=1.5.0
 numpy>=1.20.0
-selenium>=4.0.0
-webdriver-manager>=4.0.0
-gspread-dataframe>=3.3.0
 
