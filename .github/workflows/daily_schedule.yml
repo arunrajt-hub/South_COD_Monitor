@@ -1,0 +1,52 @@
+name: South COD Monitor - Daily Schedule
+
+on:
+  schedule:
+    # Run daily at 1:00 PM IST (7:30 AM UTC)
+    # Cron format: minute hour day month day-of-week
+    # IST is UTC+5:30, so 1 PM IST = 7:30 AM UTC
+    - cron: '30 7 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_south_cod_monitor.txt
+    
+    - name: Create service account key file
+      run: |
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > service_account_key.json
+      env:
+        SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+    
+    - name: Run South COD Monitor
+      env:
+        GMAIL_SENDER_EMAIL: ${{ secrets.GMAIL_SENDER_EMAIL }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      run: |
+        python South_COD_Monitor.py
+    
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: error-logs
+        path: |
+          *.log
+          *.xlsx
+        retention-days: 7
+
