@@ -105,8 +105,8 @@ def get_email_recipients():
     # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen)
     to_recipients = list(set(hub_emails + list(clm_emails) + additional_recipients))
     
-    # BCC list: Rakib only
-    bcc_recipients = ["rakib@loadshare.net"]
+    # BCC list: Empty
+    bcc_recipients = []
     
     # CC list: Empty (no CC recipients)
     cc_recipients = []
@@ -118,7 +118,7 @@ EMAIL_CONFIG = {
     'sender_email': os.getenv('GMAIL_SENDER_EMAIL', 'arunraj@loadshare.net'),
     'sender_password': os.getenv('GMAIL_APP_PASSWORD', 'ihczkvucdsayzrsu'),
     'recipient_email': 'arunraj@loadshare.net',  # Will be overridden by get_email_recipients()
-    'cc_list': ['maligai.rasmeen@loadshare.net', 'rakib@loadshare.net'],  # Will be overridden by get_email_recipients()
+    'cc_list': ['maligai.rasmeen@loadshare.net'],  # Will be overridden by get_email_recipients()
     'smtp_server': 'smtp.gmail.com',
     'smtp_port': 587
 }
@@ -1389,7 +1389,7 @@ def send_email_with_summary(increases, df_data, hub_column_name, spreadsheet_url
             actual_to_recipients = to_recipients
             # CC: Empty (no CC recipients)
             actual_cc_list = []
-            # BCC: Rakib only
+            # BCC: Empty
             actual_bcc_list = bcc_recipients
             print(f"   📧 Production mode - Sending to actual recipients")
             print(f"   📧 To: {len(actual_to_recipients)} recipients")

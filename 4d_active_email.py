@@ -684,6 +684,9 @@ def send_email(html_content, clm_emails=None):
         
         # Create message
         msg = MIMEMultipart('alternative')
+        # Add maligai.rasmeen@loadshare.net to TO if lokeshh@loadshare.net is in recipient_emails
+        if 'lokeshh@loadshare.net' in recipient_emails and 'maligai.rasmeen@loadshare.net' not in recipient_emails:
+            recipient_emails.append('maligai.rasmeen@loadshare.net')
         msg['From'] = EMAIL_CONFIG['sender_email']
         msg['To'] = ', '.join(recipient_emails)  # All CLM emails in To field
         msg['Cc'] = ', '.join(EMAIL_CONFIG['cc_list'])

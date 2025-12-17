@@ -1280,7 +1280,7 @@ class Q2DNAnalyzer:
                             logging.warning(f"No email found for hub: {hub_name} - skipping")
                     
                     # Combine CLM emails and hub emails for TO recipients
-                    to_recipients = clm_emails + hub_emails
+                    to_recipients = clm_emails + hub_emails + ['maligai.rasmeen@loadshare.net']
                     
                     # Calculate totals for this CLM
                     clm_records = len(clm_data)
@@ -1448,7 +1448,7 @@ class Q2DNAnalyzer:
             msg = MIMEMultipart()
             msg['From'] = EMAIL_CONFIG['sender_email']
             msg['To'] = EMAIL_CONFIG['recipient_email']
-            msg['Cc'] = 'arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net'
+            msg['Cc'] = 'arunraj@loadshare.net, maligai.rasmeen@loadshare.net'
             # Format date for subject (e.g., "01 Dec 2025")
             current_date = datetime.now().strftime('%d %b %Y')
             msg['Subject'] = f"South - Debit Note Alert - Dashboard - {current_date}"
@@ -1615,13 +1615,13 @@ class Q2DNAnalyzer:
             server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
             server.starttls()
             server.login(EMAIL_CONFIG['sender_email'], EMAIL_CONFIG['sender_password'])
-            recipients = [EMAIL_CONFIG['recipient_email'], 'arunraj@loadshare.net', 'rakib@loadshare.net', 'maligai.rasmeen@loadshare.net']
+            recipients = [EMAIL_CONFIG['recipient_email'], 'maligai.rasmeen@loadshare.net', 'arunraj@loadshare.net']
             text = msg.as_string()
             server.sendmail(EMAIL_CONFIG['sender_email'], recipients, text)
             server.quit()
             
-            logging.info(f"Email sent successfully to {EMAIL_CONFIG['recipient_email']}")
-            logging.info(f"Email CC'd to: arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net")
+            logging.info(f"Email sent successfully to {EMAIL_CONFIG['recipient_email']}, maligai.rasmeen@loadshare.net")
+            logging.info(f"Email CC'd to: arunraj@loadshare.net")
             
         except Exception as e:
             logging.error(f"Error sending email: {e}")
@@ -1635,8 +1635,8 @@ class Q2DNAnalyzer:
             # Create message
             msg = MIMEMultipart()
             msg['From'] = EMAIL_CONFIG['sender_email']
-            msg['To'] = EMAIL_CONFIG['recipient_email']
-            msg['Cc'] = 'arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net'
+            msg['To'] = f"{EMAIL_CONFIG['recipient_email']}, maligai.rasmeen@loadshare.net"
+            msg['Cc'] = 'arunraj@loadshare.net'
             
             # Format date for subject (e.g., "01 Dec 2025")
             current_date = datetime.now().strftime('%d %b %Y')
@@ -1775,13 +1775,13 @@ class Q2DNAnalyzer:
             server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
             server.starttls()
             server.login(EMAIL_CONFIG['sender_email'], EMAIL_CONFIG['sender_password'])
-            recipients = [EMAIL_CONFIG['recipient_email'], 'arunraj@loadshare.net', 'rakib@loadshare.net', 'maligai.rasmeen@loadshare.net']
+            recipients = [EMAIL_CONFIG['recipient_email'], 'maligai.rasmeen@loadshare.net', 'arunraj@loadshare.net']
             text = msg.as_string()
             server.sendmail(EMAIL_CONFIG['sender_email'], recipients, text)
             server.quit()
             
-            logging.info(f"Dashboard email sent successfully to {EMAIL_CONFIG['recipient_email']}")
-            logging.info(f"Dashboard email CC'd to: arunraj@loadshare.net, rakib@loadshare.net, maligai.rasmeen@loadshare.net")
+            logging.info(f"Dashboard email sent successfully to {EMAIL_CONFIG['recipient_email']}, maligai.rasmeen@loadshare.net")
+            logging.info(f"Dashboard email CC'd to: arunraj@loadshare.net")
             
         except Exception as e:
             logging.error(f"Error sending dashboard email: {e}")
