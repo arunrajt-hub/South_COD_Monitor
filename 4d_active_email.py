@@ -58,7 +58,7 @@ EMAIL_CONFIG = {
     'sender_email': os.getenv('GMAIL_SENDER_EMAIL', 'arunraj@loadshare.net'),
     'sender_password': os.getenv('GMAIL_APP_PASSWORD', 'ihczkvucdsayzrsu'),  # Gmail App Password (same as Flipkart Myntra DN Analysis)
     'recipient_email': 'arunraj@loadshare.net',  # Will be updated with all CLM emails
-    'cc_list': ['maligai.rasmeen@loadshare.net', 'rakib@loadshare.net'],
+    'cc_list': ['maligai.rasmeen@loadshare.net'],
     'smtp_server': 'smtp.gmail.com',
     'smtp_port': 587
 }
