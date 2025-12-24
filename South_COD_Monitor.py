@@ -624,6 +624,26 @@ def extract_sheet_data(worksheet):
         for i, col in enumerate(df.columns, 1):
             print(f"   {i}. {col}")
         
+        # Filter by Hub Status = "Active" if the column exists
+        hub_status_column = None
+        for col in df.columns:
+            if str(col).strip().lower() in ['hub status', 'status', 'hub_status']:
+                hub_status_column = col
+                print(f"\n✅ Found 'Hub Status' column: '{col}'")
+                break
+        
+        if hub_status_column:
+            before_status_filter = len(df)
+            # Filter for rows where Hub Status is "Active" (case-insensitive)
+            status_mask = df[hub_status_column].astype(str).str.strip().str.lower() == 'active'
+            df = df[status_mask].copy()
+            after_status_filter = len(df)
+            print(f"   📊 Filtered by Hub Status='Active': {before_status_filter} → {after_status_filter} rows")
+            print(f"   ⚠️ Removed {before_status_filter - after_status_filter} rows with non-Active status")
+        else:
+            print(f"\n⚠️ Warning: 'Hub Status' column not found. Proceeding without status filter.")
+            print(f"   Available columns: {list(df.columns)}")
+        
         # Find the hub column - specifically look for "Hub Name"
         hub_column = None
         for col in df.columns:
@@ -649,19 +669,62 @@ def extract_sheet_data(worksheet):
                 hub_series = hub_series.iloc[:, 0]
             
             # Create a mask for rows that match any of our 21 hubs
+            # Use exact matching first, then fallback to substring matching with priority for longer matches
             def matches_hub(hub_value):
                 if pd.isna(hub_value):
                     return False
                 hub_str = str(hub_value).strip()
+                hub_str_lower = hub_str.lower()
+                
+                # First, try exact match (highest priority)
+                if hub_str_lower in [h.lower() for h in HUBS]:
+                    return True
+                
+                # If no exact match, try substring matching (but prioritize longer, more specific matches)
+                # Find the LONGEST hub that matches as a substring
+                # This prevents "KoorieeSoukyaRdTempODH_BLR" from matching "KoorieeSoukyaRdODH_BLR"
+                best_match = None
+                best_match_len = 0
+                
                 for hub in HUBS:
-                    # Exact match or hub name contained in the value
-                    if hub.lower() == hub_str.lower() or hub.lower() in hub_str.lower():
-                        return True
+                    hub_lower = hub.lower()
+                    # Only match if hub name from HUBS is contained in sheet value
+                    if hub_lower != hub_str_lower and hub_lower in hub_str_lower:
+                        if len(hub) > best_match_len:
+                            best_match = hub
+                            best_match_len = len(hub)
+                
+                # Only return True if we found a match and this row matches the longest (most specific) hub
+                if best_match and best_match_len > 0:
+                    # Verify this is indeed the longest match by checking all hubs again
+                    # This ensures we only match the most specific hub name
+                    for hub in HUBS:
+                        hub_lower = hub.lower()
+                        if hub_lower != hub_str_lower and hub_lower in hub_str_lower:
+                            if len(hub) > best_match_len:
+                                # Found a longer match, so this row doesn't match the best hub
+                                return False
+                    return True
+                
                 return False
             
             mask = hub_series.apply(matches_hub)
             
             filtered_df = df[mask].copy()
+            
+            # Deduplicate by hub name to ensure only one row per hub
+            # Keep the first occurrence if there are duplicates
+            if hub_column in filtered_df.columns:
+                print(f"   Checking for duplicate hub entries...")
+                before_dedup = len(filtered_df)
+                # Normalize hub names for comparison (case-insensitive)
+                filtered_df['_hub_normalized'] = filtered_df[hub_column].astype(str).str.strip().str.lower()
+                # Remove duplicates, keeping first occurrence
+                filtered_df = filtered_df.drop_duplicates(subset=['_hub_normalized'], keep='first')
+                filtered_df = filtered_df.drop(columns=['_hub_normalized'])
+                after_dedup = len(filtered_df)
+                if before_dedup != after_dedup:
+                    print(f"   ⚠️ Removed {before_dedup - after_dedup} duplicate hub entries (kept first occurrence)")
             
             print(f"   Found {len(filtered_df)} rows matching hub names")
             print(f"   Filtered out {len(df) - len(filtered_df)} rows")
