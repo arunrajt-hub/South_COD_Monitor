@@ -8,7 +8,7 @@ import numpy as np
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 import os
 import sys
@@ -102,8 +102,10 @@ def get_email_recipients():
         "maligai.rasmeen@loadshare.net"
     ]
     
-    # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen)
-    to_recipients = list(set(hub_emails + list(clm_emails) + additional_recipients))
+    # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen + sender)
+    sender_email = EMAIL_CONFIG.get('sender_email')
+    sender_list = [sender_email] if sender_email else []
+    to_recipients = list(set(hub_emails + list(clm_emails) + additional_recipients + sender_list))
     
     # BCC list: Empty
     bcc_recipients = []
@@ -138,6 +140,11 @@ COLUMNS_TO_EXTRACT = [
 
 # Columns to extract for latest date (date is in row 1, headers in row 2)
 LATEST_DATE_COLUMNS = ['Collection', 'Gap']
+
+# Last Deposit source sheet (Status)
+LAST_DEPOSIT_SPREADSHEET_ID = '1F5wmvARWLYwZHEwLpM3SxW9R_hbJdInnRDnOdRBp-L0'
+# Leave blank to use the first worksheet
+LAST_DEPOSIT_WORKSHEET_NAME = 'Status'
 
 # ============================================================================
 # HUB CONFIGURATION (Permanent list - no need to refer other scripts)
@@ -242,6 +249,69 @@ def format_date_for_column(date_str):
     except Exception as e:
         # If any error occurs, return original string
         return str(date_str).strip() if date_str else "Latest"
+
+
+def parse_status_date(date_str):
+    """Parse date string in various formats (for Status sheet headers)"""
+    if not date_str:
+        return None
+    
+    date_str = str(date_str).strip()
+    if not date_str:
+        return None
+    
+    # Try Excel serial number
+    try:
+        if date_str.replace('.', '').replace('-', '').isdigit():
+            excel_date = float(date_str)
+            if excel_date > 59:
+                excel_date -= 1
+            excel_epoch = datetime(1899, 12, 30)
+            parsed_datetime = excel_epoch + timedelta(days=excel_date)
+            return parsed_datetime.date()
+    except:
+        pass
+    
+    # Remove time portion
+    if ' ' in date_str:
+        date_str = date_str.split(' ')[0]
+    
+    date_formats = [
+        '%d-%b-%Y', '%d-%b-%y', '%d-%B-%Y', '%d-%b',
+        '%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%d/%m/%Y',
+        '%Y/%m/%d', '%d.%m.%Y', '%m-%d-%Y', '%d/%m/%y',
+    ]
+    
+    for fmt in date_formats:
+        try:
+            parsed_date = datetime.strptime(date_str, fmt)
+            result_date = parsed_date.date()
+            
+            if fmt in ['%d-%b', '%d-%B']:
+                current_year = datetime.now().year
+                if result_date.year == 1900:
+                    try:
+                        result_date = datetime(current_year, result_date.month, result_date.day).date()
+                    except ValueError:
+                        result_date = datetime(current_year, result_date.month, min(result_date.day, 28)).date()
+            
+            # Handle year 25 as 2025
+            if result_date.year == 1925 or (result_date.year < 100 and result_date.year == 25):
+                result_date = datetime(2025, result_date.month, result_date.day).date()
+            
+            return result_date
+        except:
+            continue
+    
+    # Try pandas as last resort
+    try:
+        parsed_date = pd.to_datetime(date_str, errors='coerce')
+        if pd.notna(parsed_date):
+            return parsed_date.date()
+    except:
+        pass
+    
+    return None
 
 
 def setup_google_sheets():
@@ -377,6 +447,142 @@ def find_columns_to_extract(df):
     
     return found_columns
 
+
+def read_last_deposit_values(client):
+    """Read Last Deposit values (continuous CMS Absent/Not Uploaded days) from Status sheet"""
+    try:
+        spreadsheet = client.open_by_key(LAST_DEPOSIT_SPREADSHEET_ID)
+        worksheet = None
+        if LAST_DEPOSIT_WORKSHEET_NAME:
+            try:
+                worksheet = spreadsheet.worksheet(LAST_DEPOSIT_WORKSHEET_NAME)
+            except Exception:
+                worksheet = None
+        if not worksheet:
+            worksheet = spreadsheet.worksheets()[0] if spreadsheet.worksheets() else None
+        if not worksheet:
+            print("   ⚠️ Could not access Last Deposit worksheet")
+            return {}
+        
+        values = worksheet.get_all_values()
+        if not values:
+            return {}
+        
+        # Try to detect header row within the first 5 rows
+        header_row_idx = 0
+        for idx in range(min(5, len(values))):
+            row = values[idx]
+            if any('hub' in str(cell).lower() for cell in row if cell):
+                header_row_idx = idx
+                break
+        
+        header_row = values[header_row_idx]
+        data_rows = values[header_row_idx + 1:] if header_row_idx + 1 < len(values) else []
+        if not header_row or not data_rows:
+            return {}
+        
+        # Identify hub column from header row
+        hub_col_idx = None
+        for idx, header in enumerate(header_row):
+            if header and str(header).strip().lower() == 'hub name':
+                hub_col_idx = idx
+                break
+        if hub_col_idx is None:
+            print("   ⚠️ Could not find hub column in Last Deposit sheet")
+            return {}
+        
+        # Identify date columns from header row
+        date_columns = []
+        for col_idx, header in enumerate(header_row):
+            parsed_date = parse_status_date(header)
+            if parsed_date:
+                date_columns.append((col_idx, parsed_date))
+        
+        if not date_columns:
+            print("   ⚠️ Could not find date columns in Last Deposit sheet")
+            return {}
+        
+        # Filter to dates up to today and sort descending
+        today = datetime.now().date()
+        date_columns = [(idx, d) for idx, d in date_columns if d <= today]
+        date_columns.sort(key=lambda x: x[1], reverse=True)
+        
+        if not date_columns:
+            print("   ⚠️ No valid date columns found up to today")
+            return {}
+        
+        def is_absent_status(val):
+            if val is None:
+                return False
+            v = str(val).strip().lower()
+            return 'cms absent' in v or 'not uploaded' in v
+        
+        last_deposit_map = {}
+        for row in data_rows:
+            if hub_col_idx >= len(row):
+                continue
+            hub_name = str(row[hub_col_idx]).strip() if row[hub_col_idx] else ''
+            if not hub_name:
+                continue
+            
+            # Count continuous days from latest date backward
+            count = 0
+            expected_date = None
+            for col_idx, date_val in date_columns:
+                if expected_date is None:
+                    expected_date = date_val
+                if date_val != expected_date:
+                    break
+                status_val = row[col_idx] if col_idx < len(row) else ''
+                if is_absent_status(status_val):
+                    count += 1
+                    expected_date = expected_date - timedelta(days=1)
+                else:
+                    break
+            
+            last_deposit_map[hub_name] = count
+        
+        print(f"   📊 Read {len(last_deposit_map)} Last Deposit values")
+        return last_deposit_map
+    except Exception as e:
+        print(f"   ⚠️ Error reading Last Deposit values: {e}")
+        return {}
+
+
+def add_last_deposit_column(df, client):
+    """Add Last Deposit column (continuous CMS Absent/Not Uploaded days)"""
+    try:
+        if df.empty:
+            return df
+        
+        hub_col = find_hub_column(df)
+        if not hub_col:
+            print("⚠️ Could not find hub column in main data to add Last Deposit")
+            return df
+        
+        print("\n📥 Fetching Last Deposit values from external sheet...")
+        last_deposit_map = read_last_deposit_values(client)
+        if not last_deposit_map:
+            print("   ⚠️ No Last Deposit values found, defaulting to 0")
+            df['Last Deposit'] = 0
+            return df
+        
+        last_deposit_map_lower = {str(k).strip().lower(): v for k, v in last_deposit_map.items()}
+        
+        def get_last_deposit(hub_name):
+            if pd.isna(hub_name):
+                return 0
+            hub_key = str(hub_name).strip()
+            if hub_key in last_deposit_map:
+                return last_deposit_map[hub_key]
+            return last_deposit_map_lower.get(hub_key.lower(), 0)
+        
+        df['Last Deposit'] = df[hub_col].apply(get_last_deposit)
+        print("   ✅ Added 'Last Deposit' column")
+        return df
+    except Exception as e:
+        print(f"⚠️ Error adding Last Deposit column: {e}")
+        return df
 
 def find_latest_date_columns(all_values, headers):
     """Find Collection and Gap columns by finding the last column with updated values"""
@@ -948,30 +1154,48 @@ def display_summary(df):
 def read_previous_actual_gap_values(worksheet, hub_column_name):
     """Read previous Actual Gap values from the worksheet before updating"""
     try:
-        # Read existing data (skip header row, skip total row if exists)
-        existing_data = worksheet.get_all_records()
-        if not existing_data:
+        # Read existing data directly (Row 0 = Total, Row 1 = Header, Row 2+ = Data)
+        all_sheet_values = worksheet.get_all_values()
+        if not all_sheet_values or len(all_sheet_values) < 2:
             return {}
         
-        # Convert to DataFrame
-        existing_df = pd.DataFrame(existing_data)
-        
-        # Find hub column
-        hub_col = None
-        for col in existing_df.columns:
-            if str(col).strip().lower() in ['hub name', 'hub', 'hub_name']:
-                hub_col = col
+        # Detect header row within first 5 rows (look for Hub Name + Actual Gap)
+        header_row_idx = None
+        for idx in range(min(5, len(all_sheet_values))):
+            row = all_sheet_values[idx]
+            row_lower = [str(cell).strip().lower() for cell in row if cell]
+            if any(h in row_lower for h in ['hub name', 'hub', 'hub_name']) and any(str(cell).strip() == CALCULATED_COLUMN for cell in row):
+                header_row_idx = idx
                 break
+        if header_row_idx is None:
+            # Fallback to default layout: Row 1 header
+            header_row_idx = 1 if len(all_sheet_values) > 1 else 0
         
-        if not hub_col or CALCULATED_COLUMN not in existing_df.columns:
+        header_row = all_sheet_values[header_row_idx] if header_row_idx < len(all_sheet_values) else []
+        data_rows = all_sheet_values[header_row_idx + 1:] if header_row_idx + 1 < len(all_sheet_values) else []
+        
+        if not header_row or not data_rows:
             return {}
         
-        # Create dictionary mapping hub name to Actual Gap value
+        # Find hub and Actual Gap columns in the header row
+        hub_col_idx = None
+        actual_gap_idx = None
+        for idx, header in enumerate(header_row):
+            header_str = str(header).strip()
+            header_lower = header_str.lower()
+            if header_lower in ['hub name', 'hub', 'hub_name']:
+                hub_col_idx = idx
+            if header_str == CALCULATED_COLUMN:
+                actual_gap_idx = idx
+        
+        if hub_col_idx is None or actual_gap_idx is None:
+            return {}
+        
         previous_values = {}
         
         def safe_to_numeric(val):
             try:
-                if pd.isna(val) or val == '' or val is None:
+                if val is None or val == '':
                     return 0
                 if isinstance(val, str):
                     val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
@@ -979,12 +1203,16 @@ def read_previous_actual_gap_values(worksheet, hub_column_name):
             except:
                 return 0
         
-        for idx, row in existing_df.iterrows():
-            hub_name = str(row[hub_col]).strip() if pd.notna(row[hub_col]) else ''
-            if hub_name and hub_name.lower() != 'total':
-                actual_gap_value = safe_to_numeric(row.get(CALCULATED_COLUMN, 0))
-                if hub_name:
-                    previous_values[hub_name] = actual_gap_value
+        for row in data_rows:
+            if hub_col_idx >= len(row):
+                continue
+            hub_name = str(row[hub_col_idx]).strip() if row[hub_col_idx] else ''
+            if not hub_name or hub_name.lower() == 'total':
+                continue
+            actual_gap_value = 0
+            if actual_gap_idx < len(row):
+                actual_gap_value = safe_to_numeric(row[actual_gap_idx])
+            previous_values[hub_name] = actual_gap_value
         
         print(f"   📊 Read {len(previous_values)} previous Actual Gap values")
         return previous_values
@@ -1056,13 +1284,64 @@ def compare_actual_gap_changes(new_df, previous_values, hub_column_name):
     return increases
 
 
-def create_email_html_template(increases, df_data, hub_column_name, test_mode=False):
+def build_actual_gap_trends(new_df, previous_values, hub_column_name):
+    """Build trend indicators for Actual Gap vs previous values"""
+    trends = {}
+    stats = {'up': 0, 'down': 0, 'same': 0, 'na': 0}
+    
+    def safe_to_numeric(val):
+        try:
+            if pd.isna(val) or val == '' or val is None:
+                return 0
+            if isinstance(val, str):
+                val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+            return pd.to_numeric(val, errors='coerce') or 0
+        except:
+            return 0
+    
+    if hub_column_name not in new_df.columns or CALCULATED_COLUMN not in new_df.columns:
+        return trends, stats
+    
+    # Case-insensitive lookup for previous values
+    previous_values_lower = {}
+    for hub, value in previous_values.items():
+        previous_values_lower[hub.lower().strip()] = value
+        previous_values_lower[hub.strip()] = value
+    
+    for _, row in new_df.iterrows():
+        hub_name = str(row[hub_column_name]).strip() if pd.notna(row[hub_column_name]) else ''
+        if not hub_name or hub_name.lower() == 'total':
+            continue
+        
+        new_value = round(safe_to_numeric(row.get(CALCULATED_COLUMN, 0)))
+        previous_value = previous_values.get(hub_name, None)
+        if previous_value is None:
+            previous_value = previous_values_lower.get(hub_name.lower().strip(), None)
+        
+        if previous_value is None:
+            trend = 'na'
+        else:
+            previous_value = round(safe_to_numeric(previous_value))
+            if new_value > previous_value:
+                trend = 'up'
+            elif new_value < previous_value:
+                trend = 'down'
+            else:
+                trend = 'same'
+        
+        # Store both original and lower-case for robust lookup
+        trends[hub_name] = trend
+        trends[hub_name.lower().strip()] = trend
+        stats[trend] += 1
+    
+    return trends, stats
+
+
+def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False):
     """Create HTML email template with full table (same style as reservations_email_automation.py)"""
     today_date = datetime.now().strftime('%d-%b-%Y')
     time_str = datetime.now().strftime('%H:%M')
-    
-    # Create a set of hub names with increases for highlighting
-    increased_hubs = {inc['hub_name'] for inc in increases} if increases else set()
+    trend_map = trend_map or {}
     
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1282,30 +1561,15 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
         <div class="content">
 """
     
-    # Add summary message
-    if increases and len(increases) > 0:
-        # Create list of hubs with increases
-        increases_list = ""
-        for inc in increases:
-            increases_list += f"<li><strong>{inc['hub_name']}</strong>: ₹{inc['previous_value']:,} → ₹{inc['new_value']:,} <span style='color: #dc3545; font-weight: bold;'>(+₹{inc['deviation']:,})</span></li>"
-        
-        html += f"""
+    # Add trend legend instead of summary
+    html += """
             <div class="summary-section">
-                <div class="summary-title" style="background: #ffebee; padding: 10px; border-left: 4px solid #dc3545; margin-bottom: 15px;">
-                    ⚠️ ACTUAL GAP INCREASES DETECTED - {len(increases)} Hub(s) Affected
-                </div>
-                <p style="font-weight: bold; color: #dc3545;">The following hub(s) have shown an increase in Actual Gap (highlighted in red in the table below):</p>
-                <ul style="background: #fff3cd; padding: 10px 10px 10px 30px; border-radius: 5px; margin: 10px 0;">
-                    {increases_list}
-                </ul>
-            </div>
-"""
-    else:
-        html += """
-            <div class="summary-section">
-                <div class="no-increases">
-                    <strong>✅ No increases detected</strong><br>
-                    All hubs are stable or showing improvement in Actual Gap.
+                <div class="summary-title">📈 Actual Gap Trend</div>
+                <div style="font-size: 12px; color: #555;">
+                    <span style="color: #dc3545;"><strong>▲</strong></span> Increase&nbsp;&nbsp;
+                    <span style="color: #28a745;"><strong>▼</strong></span> Decrease&nbsp;&nbsp;
+                    <span style="color: #6c757d;"><strong>▶</strong></span> No Change&nbsp;&nbsp;
+                    <span style="color: #adb5bd;"><strong>•</strong></span> No History
                 </div>
             </div>
 """
@@ -1320,7 +1584,7 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
                     <tr>
 """
         # Add table headers (excluding Total Collection and Total Deposit)
-        columns_to_show = ['Hub Name', 'Overall Gap', 
+        columns_to_show = ['Hub Name', 'Last Deposit', 'Overall Gap', 
                           'Van Adhoc', 'Legal Issue', 'Old Balance', 'Actual Gap']
         # Add latest date columns if they exist
         latest_date_cols = [col for col in df_data.columns if 'Colc ' in str(col) or ('Gap ' in str(col) and col != 'Overall Gap')]
@@ -1350,6 +1614,8 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
         for col in columns_to_show:
             if col == 'Hub Name':
                 html += '                        <td style="font-weight: bold; background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%); color: white; font-size: 10px; padding: 6px 4px;">Total</td>\n'
+            elif col == 'Last Deposit':
+                html += '                        <td style="text-align: right; font-weight: bold; background: #e3f2fd; font-size: 10px; padding: 6px 4px;">-</td>\n'
             elif col in df_data.columns:
                 # Calculate sum for this column
                 total_value = 0
@@ -1370,15 +1636,26 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
         
         html += '                    </tr>\n'
         
+        # Helper for trend icon next to Actual Gap
+        def get_trend_icon(trend):
+            # Use heavier symbol set with color in cells for visibility
+            if trend == 'up':
+                return " <span style='color: #dc3545; font-weight: bold;'>▲</span>"
+            if trend == 'down':
+                return " <span style='color: #28a745; font-weight: bold;'>▼</span>"
+            if trend == 'same':
+                return " <span style='color: #6c757d; font-weight: bold;'>▶</span>"
+            return " <span style='color: #adb5bd; font-weight: bold;'>•</span>"
+        
         # Add data rows (excluding total row)
         for idx, row in df_data.iterrows():
             hub_name = str(row[hub_column_name]).strip() if pd.notna(row[hub_column_name]) else ''
             if not hub_name or hub_name.lower() == 'total':
                 continue
             
-            # Check if this hub has an increase
-            has_increase = hub_name in increased_hubs
-            row_class = 'increase-row' if has_increase else ''
+            trend = trend_map.get(hub_name) or trend_map.get(hub_name.lower().strip())
+            # Do not highlight entire row; show only the symbol in Actual Gap cell
+            row_class = ''
             
             html += f'                    <tr class="{row_class}">\n'
             
@@ -1391,15 +1668,28 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
                         html += '                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">-</td>\n'
                     else:
                         try:
-                            # Format as number with currency
-                            num_value = float(str(value).replace(',', '').replace('₹', '').strip())
-                            if num_value == int(num_value):
-                                formatted_value = f'₹{int(num_value):,}'
+                            if col == 'Last Deposit':
+                                num_value = float(str(value).replace(',', '').replace('₹', '').strip())
+                                formatted_value = f'{int(num_value)}'
+                                if num_value > 1:
+                                    formatted_value = f"<span style='color: #dc3545; font-weight: bold;'>{formatted_value}</span>"
+                                html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
                             else:
-                                formatted_value = f'₹{num_value:,.2f}'
-                            html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
+                                # Format as number with currency
+                                num_value = float(str(value).replace(',', '').replace('₹', '').strip())
+                                if num_value == int(num_value):
+                                    formatted_value = f'₹{int(num_value):,}'
+                                else:
+                                    formatted_value = f'₹{num_value:,.2f}'
+                                if col == CALCULATED_COLUMN:
+                                    html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}{get_trend_icon(trend)}</td>\n'
+                                else:
+                                    html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
                         except:
-                            html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{value}</td>\n'
+                            if col == CALCULATED_COLUMN:
+                                html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{value}{get_trend_icon(trend)}</td>\n'
+                            else:
+                                html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{value}</td>\n'
                 else:
                     html += '                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">-</td>\n'
             
@@ -1427,8 +1717,8 @@ def create_email_html_template(increases, df_data, hub_column_name, test_mode=Fa
     return html
 
 
-def send_email_with_summary(increases, df_data, hub_column_name, spreadsheet_url):
-    """Send email with summary of Actual Gap increases (using same email config as reservations_email_automation.py)"""
+def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map=None, trend_stats=None):
+    """Send email with Actual Gap trend arrows (using same email config as reservations_email_automation.py)"""
     try:
         if not EMAIL_ENABLED or not EMAIL_CONFIG['sender_password']:
             print(f"\n📧 Email sending is disabled or not configured")
@@ -1463,20 +1753,15 @@ def send_email_with_summary(increases, df_data, hub_column_name, spreadsheet_url
         current_time = datetime.now().strftime('%H:%M')
         
         # Create HTML email content with full table
-        html_content = create_email_html_template(increases, df_data, hub_column_name, test_mode=TEST_MODE)
+        html_content = create_email_html_template(df_data, hub_column_name, trend_map=trend_map, test_mode=TEST_MODE)
         
         # Create plain text version for email clients that don't support HTML
         plain_text = f"""South COD Monitor - Actual Gap Alert
 {today_date} - {current_time}
 
 """
-        if increases:
-            plain_text += f"ACTUAL GAP INCREASES DETECTED\n\n"
-            plain_text += f"The following {len(increases)} hub(s) have shown an increase in Actual Gap:\n\n"
-            for inc in increases:
-                plain_text += f"{inc['hub_name']}: ₹{inc['previous_value']:,} -> ₹{inc['new_value']:,} (+₹{inc['deviation']:,})\n"
-        else:
-            plain_text += "No increases detected. All hubs are stable or showing improvement.\n"
+        plain_text += "Actual Gap trend arrows are included in the HTML table.\n"
+        plain_text += "Legend: ▲ Increase, ▼ Decrease, ▶ No Change, • No History\n"
         
         plain_text += f"\nView full report: {spreadsheet_url}\n"
         
@@ -1533,10 +1818,8 @@ def send_email_with_summary(increases, df_data, hub_column_name, spreadsheet_url
                 server.quit()
                 
                 print(f"   ✅ Email sent successfully")
-                if increases:
-                    print(f"   📊 Summary: {len(increases)} hub(s) with increased Actual Gap")
-                    for inc in increases:
-                        print(f"      • {inc['hub_name']}: ₹{inc['previous_value']:,} → ₹{inc['new_value']:,} (+₹{inc['deviation']:,})")
+                if trend_stats:
+                    print(f"   📊 Trend summary: ▲ {trend_stats.get('up', 0)}, ▼ {trend_stats.get('down', 0)}, ▶ {trend_stats.get('same', 0)}, • {trend_stats.get('na', 0)}")
                 return  # Success, exit function
                 
             except (smtplib.SMTPConnectError, smtplib.SMTPException, ConnectionError, TimeoutError, OSError) as e:
@@ -1577,6 +1860,8 @@ def upload_to_google_sheets(df, client):
     # Initialize variables for email summary
     increases_summary = []
     previous_actual_gap_values = {}
+    trend_map = {}
+    trend_stats = {}
     
     try:
         if df.empty:
@@ -1650,6 +1935,7 @@ def upload_to_google_sheets(df, client):
                         
                         # Read previous Actual Gap values for comparison (before clearing)
                         if hub_col_existing:
+                            print("   📥 Reading previous Actual Gap values from destination sheet...")
                             previous_actual_gap_values = read_previous_actual_gap_values(worksheet, hub_col_existing)
                     else:
                         existing_df = pd.DataFrame()
@@ -1925,10 +2211,9 @@ def upload_to_google_sheets(df, client):
                 # Find the Gap date column (e.g., "Gap 11-Dec")
                 gap_date_col = None
                 for col in df_upload.columns:
-                    if 'Gap ' in str(col) and col != 'Overall Gap':
+                    col_str = str(col)
+                    if 'Gap ' in col_str and col != 'Overall Gap':
                         gap_date_col = col
-                        break
-                
                 if gap_date_col:
                     print(f"   📅 Found Gap date column: '{gap_date_col}'")
                 else:
@@ -1971,7 +2256,7 @@ def upload_to_google_sheets(df, client):
             if CALCULATED_COLUMN not in df_upload.columns:
                 df_upload[CALCULATED_COLUMN] = None
         
-        # Compare Actual Gap changes and prepare email summary
+        # Compare Actual Gap changes and build trend map for email arrows
         increases_summary = []
         if hub_col_upload and CALCULATED_COLUMN in df_upload.columns:
             if previous_actual_gap_values:
@@ -1986,7 +2271,11 @@ def upload_to_google_sheets(df, client):
                     print(f"   ✅ No increases in Actual Gap detected")
             else:
                 print(f"\n📊 No previous Actual Gap values found (first run or empty sheet)")
-                print(f"   ℹ️  Email will be sent without increase comparison")
+                print(f"   ℹ️  Email will show trend arrows as 'No History'")
+            
+            trend_map, trend_stats = build_actual_gap_trends(df_upload, previous_actual_gap_values, hub_col_upload)
+            if trend_stats:
+                print(f"   📈 Trend summary: ▲ {trend_stats.get('up', 0)}, ▼ {trend_stats.get('down', 0)}, ▶ {trend_stats.get('same', 0)}, • {trend_stats.get('na', 0)}")
         
         # Reorder columns to ensure correct order: Colc Date and Gap Date should be LAST
         print(f"\n📋 Reordering columns for final upload...")
@@ -2017,8 +2306,8 @@ def upload_to_google_sheets(df, client):
                 ordered_columns.append(col)
                 break
         
-        # Add standard columns (Total Collection, Total Deposit, Overall Gap)
-        standard_cols = ['Total Collection', 'Total Deposit', 'Overall Gap']
+        # Add standard columns (Total Collection, Total Deposit, Last Deposit, Overall Gap)
+        standard_cols = ['Total Collection', 'Total Deposit', 'Last Deposit', 'Overall Gap']
         for col in standard_cols:
             if col in remaining_columns and col not in ordered_columns:
                 ordered_columns.append(col)
@@ -2082,7 +2371,7 @@ def upload_to_google_sheets(df, client):
         
         # Round all numeric values in df_upload first
         print(f"\n🔢 Rounding all numeric values...")
-        numeric_cols_list = ['Total Collection', 'Total Deposit', 'Overall Gap', CALCULATED_COLUMN] + PRESERVE_COLUMNS
+        numeric_cols_list = ['Total Collection', 'Total Deposit', 'Last Deposit', 'Overall Gap', CALCULATED_COLUMN] + PRESERVE_COLUMNS
         # Add latest date columns
         latest_date_cols_for_rounding = [col for col in df_upload.columns if 'Colc ' in str(col) or ('Gap ' in str(col) and col != 'Overall Gap')]
         numeric_cols_list.extend(latest_date_cols_for_rounding)
@@ -2107,6 +2396,9 @@ def upload_to_google_sheets(df, client):
         for col in ordered_columns:
             if col == hub_col:
                 total_row[col] = "Total"
+            elif col == 'Last Deposit':
+                # Do not sum Last Deposit (days count)
+                total_row[col] = ""
             else:
                 # For numeric columns, calculate sum and round
                 try:
@@ -2204,6 +2496,53 @@ def upload_to_google_sheets(df, client):
                         'numberFormat': {'type': 'CURRENCY', 'pattern': '₹#,##0'},
                         'horizontalAlignment': 'RIGHT'
                     })
+
+        # Format Last Deposit as number (days)
+        if 'Last Deposit' in df_upload.columns:
+            col_idx = list(df_upload.columns).index('Last Deposit')
+            col_letter = get_column_letter(col_idx)
+            
+            worksheet.format(f'{col_letter}1', {
+                'numberFormat': {'type': 'NUMBER', 'pattern': '0'},
+                'horizontalAlignment': 'RIGHT',
+                'textFormat': {'bold': True},
+                'backgroundColor': {'red': 1.0, 'green': 1.0, 'blue': 0.0}
+            })
+            if num_data_rows > 0:
+                worksheet.format(f'{col_letter}3:{col_letter}{num_data_rows + 2}', {
+                    'numberFormat': {'type': 'NUMBER', 'pattern': '0'},
+                    'horizontalAlignment': 'RIGHT'
+                })
+            
+            # Highlight Last Deposit > 1 in red and bold using conditional formatting
+            if num_data_rows > 0:
+                requests = [{
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [{
+                                "sheetId": worksheet.id,
+                                "startRowIndex": 2,
+                                "endRowIndex": 2 + num_data_rows,
+                                "startColumnIndex": col_idx,
+                                "endColumnIndex": col_idx + 1
+                            }],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "NUMBER_GREATER",
+                                    "values": [{"userEnteredValue": "1"}]
+                                },
+                                "format": {
+                                    "textFormat": {
+                                        "bold": True,
+                                        "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}
+                                    }
+                                }
+                            }
+                        },
+                        "index": 0
+                    }
+                }]
+                spreadsheet.batch_update({"requests": requests})
         
         # Left align Hub Name column in data rows (row 3 onwards)
         if num_columns >= 1 and num_data_rows > 0:
@@ -2215,16 +2554,16 @@ def upload_to_google_sheets(df, client):
         spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{OUTPUT_SPREADSHEET_ID}/edit#gid={worksheet.id}"
         print(f"\n🔗 Google Sheet URL: {spreadsheet_url}")
         
-        # Send email with summary of Actual Gap increases
+        # Send email with Actual Gap trend arrows
         # Use df_upload (before total row is added) for email table
-        # Always send email (even if no increases) to show the full report
+        # Always send email to show the full report
         if hub_col_upload:
             print(f"\n📧 Preparing to send email...")
-            if increases_summary:
-                print(f"   ⚠️ Alert: {len(increases_summary)} hub(s) with increased Actual Gap will be highlighted")
+            if trend_stats and trend_stats.get('up', 0) > 0:
+                print(f"   ⚠️ Alert: {trend_stats.get('up', 0)} hub(s) with increased Actual Gap will be highlighted")
             else:
-                print(f"   ℹ️  No increases detected - email will show full report without alerts")
-            send_email_with_summary(increases_summary, df_upload, hub_col_upload, spreadsheet_url)
+                print(f"   ℹ️  No increases detected - email will show full report with trend arrows")
+            send_email_with_summary(df_upload, hub_col_upload, spreadsheet_url, trend_map=trend_map, trend_stats=trend_stats)
         else:
             print(f"\n⚠️ Cannot send email: Hub column not found")
         
@@ -2256,6 +2595,9 @@ def main():
         
         # Extract data
         df = extract_sheet_data(worksheet)
+        
+        # Add Last Deposit from external sheet
+        df = add_last_deposit_column(df, client)
         
         if df.empty:
             print("❌ No data extracted. Exiting...")
