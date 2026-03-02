@@ -1,4 +1,4 @@
-﻿"""
+"""
 South COD Monitor
 Script to extract data from Google Sheets and generate reports for all hubs.
 Sends styled HTML email and the same report as an image to WhatsApp via WHAPI.
@@ -2535,8 +2535,9 @@ def upload_to_google_sheets(df, client):
                     return 0
                 if isinstance(val, str):
                     val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
-                return pd.to_numeric(val, errors='coerce') or 0
-            except:
+                result = pd.to_numeric(val, errors='coerce')
+                return 0 if pd.isna(result) else float(result)
+            except Exception:
                 return 0
         
         # Round all numeric values in df_upload first
@@ -2548,9 +2549,9 @@ def upload_to_google_sheets(df, client):
         
         for col_name in df_upload.columns:
             if col_name in numeric_cols_list:
-                # Round numeric columns to nearest integer
+                # Round numeric columns to nearest integer (use 0 for NaN/empty to avoid "cannot convert float NaN to integer")
                 df_upload[col_name] = df_upload[col_name].apply(
-                    lambda x: round(safe_to_numeric(x)) if pd.notna(x) and x != '' else x
+                    lambda x: round(safe_to_numeric(x)) if pd.notna(x) and str(x).strip() != '' else 0
                 )
         
         print(f"   Γ£à All numeric values rounded to whole numbers")
