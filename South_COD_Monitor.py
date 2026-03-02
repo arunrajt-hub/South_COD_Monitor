@@ -1,6 +1,8 @@
-"""
+﻿"""
 South COD Monitor
-Script to extract data from Google Sheets and generate reports for all hubs
+Script to extract data from Google Sheets and generate reports for all hubs.
+Sends styled HTML email and the same report as an image to WhatsApp via WHAPI.
+Similar to reservations_email_automation.py.
 """
 
 import pandas as pd
@@ -15,8 +17,14 @@ import sys
 import time
 import string
 import smtplib
+import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # Google Sheets Configuration
 SCOPES = [
@@ -48,6 +56,7 @@ CLM_EMAIL = {
     "Haseem": "hasheem@loadshare.net",
     "Madvesh": "madvesh@loadshare.net",
     "Irappa": "irappa.vaggappanavar@loadshare.net",
+    "Singaram": "singaram@loadshare.net",
     "Lokesh": "lokeshh@loadshare.net",
     "Bharath": "bharath.s@loadshare.net"
 }
@@ -127,6 +136,16 @@ EMAIL_CONFIG = {
 EMAIL_ENABLED = True  # Set to False to disable email sending
 TEST_MODE = False  # Set to True to mute recipients and send to test email only
 TEST_EMAIL = 'arunraj@loadshare.net'  # Test email address (usually sender's own email)
+
+# WhatsApp (WHAPI) Configuration - same as reservations_email_automation.py
+# Dashboard: https://whapi.cloud/
+WHATSAPP_CONFIG = {
+    'enabled': os.getenv('WHATSAPP_ENABLED', '1') == '1',  # Set WHATSAPP_ENABLED=0 to disable
+    'token': os.getenv('WHAPI_TOKEN', 'AajpPuQixaM8bnjBLetBt2n23Z5XOCji'),
+    'recipient_phone': os.getenv('WHATSAPP_PHONE', '919500055366'),
+    'api_url': 'https://gate.whapi.cloud/messages/image',
+}
+HTML_TO_IMAGE_SERVICE_URL = os.getenv('HTML_TO_IMAGE_SERVICE_URL', '')  # Optional cloud service
 
 # Output file name
 OUTPUT_FILE = 'South_COD_Monitor_Report.xlsx'
@@ -318,17 +337,17 @@ def setup_google_sheets():
     """Setup Google Sheets connection using service account"""
     try:
         if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            print(f"❌ Error: Service account key file not found: {SERVICE_ACCOUNT_FILE}")
+            print(f"Γ¥î Error: Service account key file not found: {SERVICE_ACCOUNT_FILE}")
             print("Please ensure the service_account_key.json file is in the same directory.")
             sys.exit(1)
         
-        print("🔑 Setting up Google Sheets connection...")
+        print("≡ƒöæ Setting up Google Sheets connection...")
         credentials = Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE,
             scopes=SCOPES
         )
         client = gspread.authorize(credentials)
-        print("✅ Google Sheets connection established")
+        print("Γ£à Google Sheets connection established")
         
         # Display service account email for sharing reference
         try:
@@ -336,14 +355,14 @@ def setup_google_sheets():
             with open(SERVICE_ACCOUNT_FILE, 'r') as f:
                 service_account_data = json.load(f)
                 service_account_email = service_account_data.get('client_email', 'Not found')
-                print(f"📧 Service Account Email: {service_account_email}")
-                print("💡 Make sure the Google Sheet is shared with this email address (Editor access)")
+                print(f"≡ƒôº Service Account Email: {service_account_email}")
+                print("≡ƒÆí Make sure the Google Sheet is shared with this email address (Editor access)")
         except Exception as e:
-            print(f"⚠️ Could not extract service account email: {e}")
+            print(f"ΓÜá∩╕Å Could not extract service account email: {e}")
         
         return client
     except Exception as e:
-        print(f"❌ Error setting up Google Sheets: {e}")
+        print(f"Γ¥î Error setting up Google Sheets: {e}")
         raise
 
 
@@ -351,11 +370,11 @@ def get_worksheet_by_name(client, spreadsheet_id, worksheet_name):
     """Get worksheet by name"""
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
-        print(f"✅ Opened spreadsheet: {spreadsheet.title}")
+        print(f"Γ£à Opened spreadsheet: {spreadsheet.title}")
         
         # List all worksheets
         worksheets = spreadsheet.worksheets()
-        print(f"\n📊 Available worksheets ({len(worksheets)}):")
+        print(f"\n≡ƒôè Available worksheets ({len(worksheets)}):")
         for i, ws in enumerate(worksheets, 1):
             print(f"   {i}. {ws.title} (ID: {ws.id})")
         
@@ -364,22 +383,22 @@ def get_worksheet_by_name(client, spreadsheet_id, worksheet_name):
         for ws in worksheets:
             if ws.title.lower() == worksheet_name.lower():
                 target_worksheet = ws
-                print(f"\n✅ Found target worksheet: '{ws.title}'")
+                print(f"\nΓ£à Found target worksheet: '{ws.title}'")
                 break
         
         if not target_worksheet:
-            print(f"\n⚠️ Warning: Could not find worksheet named '{worksheet_name}'")
+            print(f"\nΓÜá∩╕Å Warning: Could not find worksheet named '{worksheet_name}'")
             print("Available worksheets:")
             for ws in worksheets:
                 print(f"   - {ws.title}")
             print("\nTrying to use the first worksheet instead...")
             target_worksheet = worksheets[0] if worksheets else None
             if target_worksheet:
-                print(f"⚠️ Using '{target_worksheet.title}' as fallback")
+                print(f"ΓÜá∩╕Å Using '{target_worksheet.title}' as fallback")
         
         return target_worksheet
     except Exception as e:
-        print(f"❌ Error accessing spreadsheet: {e}")
+        print(f"Γ¥î Error accessing spreadsheet: {e}")
         raise
 
 
@@ -412,7 +431,7 @@ def find_hub_column(df):
                 for hub in HUBS:
                     if any(hub.lower() in str(val).lower() for val in sample_values):
                         hub_column = col
-                        print(f"✅ Found hub column by matching hub names: '{col}'")
+                        print(f"Γ£à Found hub column by matching hub names: '{col}'")
                         break
                 if hub_column:
                     break
@@ -427,7 +446,7 @@ def find_columns_to_extract(df):
     """Find the columns that match the required column names (case-insensitive)"""
     found_columns = {}
     
-    print(f"\n🔍 Searching for required columns...")
+    print(f"\n≡ƒöì Searching for required columns...")
     
     for required_col in COLUMNS_TO_EXTRACT:
         found = False
@@ -438,12 +457,12 @@ def find_columns_to_extract(df):
             # Exact match or contains the key words
             if col_lower == required_lower or required_lower in col_lower:
                 found_columns[required_col] = col
-                print(f"   ✅ Found '{required_col}' -> '{col}'")
+                print(f"   Γ£à Found '{required_col}' -> '{col}'")
                 found = True
                 break
         
         if not found:
-            print(f"   ⚠️ Column '{required_col}' not found")
+            print(f"   ΓÜá∩╕Å Column '{required_col}' not found")
     
     return found_columns
 
@@ -461,7 +480,7 @@ def read_last_deposit_values(client):
         if not worksheet:
             worksheet = spreadsheet.worksheets()[0] if spreadsheet.worksheets() else None
         if not worksheet:
-            print("   ⚠️ Could not access Last Deposit worksheet")
+            print("   ΓÜá∩╕Å Could not access Last Deposit worksheet")
             return {}
         
         values = worksheet.get_all_values()
@@ -488,7 +507,7 @@ def read_last_deposit_values(client):
                 hub_col_idx = idx
                 break
         if hub_col_idx is None:
-            print("   ⚠️ Could not find hub column in Last Deposit sheet")
+            print("   ΓÜá∩╕Å Could not find hub column in Last Deposit sheet")
             return {}
         
         # Identify date columns from header row
@@ -499,7 +518,7 @@ def read_last_deposit_values(client):
                 date_columns.append((col_idx, parsed_date))
         
         if not date_columns:
-            print("   ⚠️ Could not find date columns in Last Deposit sheet")
+            print("   ΓÜá∩╕Å Could not find date columns in Last Deposit sheet")
             return {}
         
         # Filter to dates up to today and sort descending
@@ -508,7 +527,7 @@ def read_last_deposit_values(client):
         date_columns.sort(key=lambda x: x[1], reverse=True)
         
         if not date_columns:
-            print("   ⚠️ No valid date columns found up to today")
+            print("   ΓÜá∩╕Å No valid date columns found up to today")
             return {}
         
         def is_absent_status(val):
@@ -542,10 +561,10 @@ def read_last_deposit_values(client):
             
             last_deposit_map[hub_name] = count
         
-        print(f"   📊 Read {len(last_deposit_map)} Last Deposit values")
+        print(f"   ≡ƒôè Read {len(last_deposit_map)} Last Deposit values")
         return last_deposit_map
     except Exception as e:
-        print(f"   ⚠️ Error reading Last Deposit values: {e}")
+        print(f"   ΓÜá∩╕Å Error reading Last Deposit values: {e}")
         return {}
 
 
@@ -557,13 +576,13 @@ def add_last_deposit_column(df, client):
         
         hub_col = find_hub_column(df)
         if not hub_col:
-            print("⚠️ Could not find hub column in main data to add Last Deposit")
+            print("ΓÜá∩╕Å Could not find hub column in main data to add Last Deposit")
             return df
         
-        print("\n📥 Fetching Last Deposit values from external sheet...")
+        print("\n≡ƒôÑ Fetching Last Deposit values from external sheet...")
         last_deposit_map = read_last_deposit_values(client)
         if not last_deposit_map:
-            print("   ⚠️ No Last Deposit values found, defaulting to 0")
+            print("   ΓÜá∩╕Å No Last Deposit values found, defaulting to 0")
             df['Last Deposit'] = 0
             return df
         
@@ -578,10 +597,10 @@ def add_last_deposit_column(df, client):
             return last_deposit_map_lower.get(hub_key.lower(), 0)
         
         df['Last Deposit'] = df[hub_col].apply(get_last_deposit)
-        print("   ✅ Added 'Last Deposit' column")
+        print("   Γ£à Added 'Last Deposit' column")
         return df
     except Exception as e:
-        print(f"⚠️ Error adding Last Deposit column: {e}")
+        print(f"ΓÜá∩╕Å Error adding Last Deposit column: {e}")
         return df
 
 def find_latest_date_columns(all_values, headers):
@@ -597,7 +616,7 @@ def find_latest_date_columns(all_values, headers):
         # Data starts from row 3 (index 2)
         data_rows = all_values[2:]
         
-        print(f"\n📅 Finding last column with updated values...")
+        print(f"\n≡ƒôà Finding last column with updated values...")
         
         # Find the rightmost column group (Collection, Deposit, Gap) that has data
         # Look for columns that have non-zero, non-empty values
@@ -619,7 +638,7 @@ def find_latest_date_columns(all_values, headers):
                     # Check if it's a number (currency format or plain number)
                     if cell_value:
                         # Remove currency symbols and commas
-                        clean_value = cell_value.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                        clean_value = cell_value.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
                         try:
                             num_value = float(clean_value)
                             if num_value != 0:
@@ -632,12 +651,12 @@ def find_latest_date_columns(all_values, headers):
                 column_has_data[col_idx] = non_zero_count
         
         if not column_has_data:
-            print("   ⚠️ No columns with data found")
+            print("   ΓÜá∩╕Å No columns with data found")
             return {}, None
         
         # Find the rightmost column with data
         rightmost_col_idx = max(column_has_data.keys())
-        print(f"   ✅ Rightmost column with data: Column {rightmost_col_idx} ({column_has_data[rightmost_col_idx]} non-zero values)")
+        print(f"   Γ£à Rightmost column with data: Column {rightmost_col_idx} ({column_has_data[rightmost_col_idx]} non-zero values)")
         
         # Get the date from row 1 for this column (or nearby columns if merged)
         latest_date_str = None
@@ -648,7 +667,7 @@ def find_latest_date_columns(all_values, headers):
                 date_value = date_row[check_idx] if check_idx < len(date_row) else ''
                 if date_value and str(date_value).strip():
                     latest_date_str = str(date_value).strip()
-                    print(f"   📅 Found date '{latest_date_str}' at column {check_idx}")
+                    print(f"   ≡ƒôà Found date '{latest_date_str}' at column {check_idx}")
                     break
         
         if not latest_date_str:
@@ -657,12 +676,12 @@ def find_latest_date_columns(all_values, headers):
                 date_value = date_row[check_idx] if check_idx < len(date_row) else ''
                 if date_value and str(date_value).strip():
                     latest_date_str = str(date_value).strip()
-                    print(f"   📅 Found date '{latest_date_str}' at column {check_idx} (near rightmost)")
+                    print(f"   ≡ƒôà Found date '{latest_date_str}' at column {check_idx} (near rightmost)")
                     break
         
         if not latest_date_str:
             latest_date_str = "Latest"
-            print(f"   ⚠️ Could not find date, using 'Latest'")
+            print(f"   ΓÜá∩╕Å Could not find date, using 'Latest'")
         
         # For merged headers, Collection, Deposit, Gap are typically the last 3 columns
         # Collection is first (idx-2), Deposit is middle (idx-1), Gap is last (idx)
@@ -676,7 +695,7 @@ def find_latest_date_columns(all_values, headers):
         else:
             latest_date_range = [rightmost_col_idx]
         
-        print(f"   📍 Column range for latest data: {latest_date_range} (Collection at {latest_date_range[0]}, Gap at {latest_date_range[-1]})")
+        print(f"   ≡ƒôì Column range for latest data: {latest_date_range} (Collection at {latest_date_range[0]}, Gap at {latest_date_range[-1]})")
         
         # Now look for Collection and Gap headers in row 2 (headers row)
         # Handle merged cells: if header is empty, check previous non-empty header
@@ -694,7 +713,7 @@ def find_latest_date_columns(all_values, headers):
                 # Merged cell - use previous header
                 header_map[col_idx] = last_non_empty_header
         
-        print(f"   📋 Header mapping (handling merged cells) - last 15 columns:")
+        print(f"   ≡ƒôï Header mapping (handling merged cells) - last 15 columns:")
         for col_idx in sorted(header_map.keys())[-15:]:  # Show last 15 for debugging
             print(f"      Column {col_idx}: '{header_map[col_idx]}'")
         
@@ -708,17 +727,17 @@ def find_latest_date_columns(all_values, headers):
             # First, search within the latest date range
             # For merged headers: Collection is first column, Gap is last (3rd) column
             if latest_date_range:
-                print(f"   🔍 Searching for '{col_name}' in date range: {latest_date_range}")
+                print(f"   ≡ƒöì Searching for '{col_name}' in date range: {latest_date_range}")
                 
                 # For merged columns: Collection is first, Gap is last
                 if col_name_lower == 'collection':
                     # Collection is the first column in the merged range
                     target_idx = latest_date_range[0]
-                    print(f"      → Targeting first column in range: index {target_idx}")
+                    print(f"      ΓåÆ Targeting first column in range: index {target_idx}")
                 elif col_name_lower == 'gap':
                     # Gap is the last column in the merged range (should be 3rd column)
                     target_idx = latest_date_range[-1] if len(latest_date_range) >= 3 else latest_date_range[-1]
-                    print(f"      → Targeting last column in range: index {target_idx}")
+                    print(f"      ΓåÆ Targeting last column in range: index {target_idx}")
                 else:
                     target_idx = None
                 
@@ -727,7 +746,7 @@ def find_latest_date_columns(all_values, headers):
                     if target_idx in header_map:
                         header = header_map[target_idx]
                         header_lower = str(header).lower().strip()
-                        print(f"      → Header at index {target_idx}: '{header}'")
+                        print(f"      ΓåÆ Header at index {target_idx}: '{header}'")
                         
                         # Check if header matches
                         if col_name_lower == header_lower or col_name_lower in header_lower:
@@ -736,11 +755,11 @@ def find_latest_date_columns(all_values, headers):
                                 'header': header,
                                 'date': latest_date_str
                             }
-                            print(f"   ✅ Found '{col_name}' column at index {target_idx}: '{header}' (Date: {latest_date_str})")
+                            print(f"   Γ£à Found '{col_name}' column at index {target_idx}: '{header}' (Date: {latest_date_str})")
                             found = True
                         else:
                             # Header doesn't match, search within the range
-                            print(f"      → Header doesn't match, searching within range...")
+                            print(f"      ΓåÆ Header doesn't match, searching within range...")
                             for col_idx in latest_date_range:
                                 if col_idx in header_map:
                                     header = header_map[col_idx]
@@ -752,11 +771,11 @@ def find_latest_date_columns(all_values, headers):
                                             'header': header,
                                             'date': latest_date_str
                                         }
-                                        print(f"   ✅ Found '{col_name}' column at index {col_idx}: '{header}' (Date: {latest_date_str})")
+                                        print(f"   Γ£à Found '{col_name}' column at index {col_idx}: '{header}' (Date: {latest_date_str})")
                                         found = True
                                         break
                     else:
-                        print(f"      ⚠️ Index {target_idx} not in header_map")
+                        print(f"      ΓÜá∩╕Å Index {target_idx} not in header_map")
             
             # If not found in date range, search all columns (fallback)
             if not found:
@@ -770,18 +789,18 @@ def find_latest_date_columns(all_values, headers):
                                 'header': header,
                                 'date': latest_date_str
                             }
-                            print(f"   ✅ Found '{col_name}' column at index {col_idx}: '{header}' (Date: {latest_date_str}) [fallback]")
+                            print(f"   Γ£à Found '{col_name}' column at index {col_idx}: '{header}' (Date: {latest_date_str}) [fallback]")
                             found = True
                             break
         
         if len(found_columns) < len(LATEST_DATE_COLUMNS):
             missing = [col for col in LATEST_DATE_COLUMNS if col not in found_columns]
-            print(f"   ⚠️ Could not find columns: {missing}")
+            print(f"   ΓÜá∩╕Å Could not find columns: {missing}")
         
         return found_columns, latest_date_str
         
     except Exception as e:
-        print(f"   ⚠️ Error finding latest date columns: {e}")
+        print(f"   ΓÜá∩╕Å Error finding latest date columns: {e}")
         import traceback
         traceback.print_exc()
         return {}, None
@@ -790,22 +809,22 @@ def find_latest_date_columns(all_values, headers):
 def extract_sheet_data(worksheet):
     """Extract data from the worksheet, filtered by hub names"""
     try:
-        print(f"\n📥 Reading data from worksheet: '{worksheet.title}'...")
+        print(f"\n≡ƒôÑ Reading data from worksheet: '{worksheet.title}'...")
         
         # Get all values from the worksheet
         all_values = worksheet.get_all_values()
         
         if not all_values or len(all_values) < 2:
-            print("⚠️ Warning: No data found in the worksheet or insufficient rows")
+            print("ΓÜá∩╕Å Warning: No data found in the worksheet or insufficient rows")
             return pd.DataFrame()
         
         # Headers are in row 2 (index 1)
         headers = all_values[1]  # Row 2 (0-indexed, so index 1)
-        print(f"📋 Found {len(headers)} columns (headers from row 2)")
+        print(f"≡ƒôï Found {len(headers)} columns (headers from row 2)")
         
         # Get data rows starting from row 3 (index 2)
         data_rows = all_values[2:] if len(all_values) > 2 else []
-        print(f"📊 Found {len(data_rows)} data rows (starting from row 3)")
+        print(f"≡ƒôè Found {len(data_rows)} data rows (starting from row 3)")
         
         # Find Collection and Gap columns for latest date (date is in row 1, headers in row 2)
         latest_date_columns, latest_date_str = find_latest_date_columns(all_values, headers)
@@ -815,7 +834,7 @@ def extract_sheet_data(worksheet):
         
         # Handle duplicate column names by making them unique
         if df.columns.duplicated().any():
-            print("⚠️ Warning: Found duplicate column names. Making them unique...")
+            print("ΓÜá∩╕Å Warning: Found duplicate column names. Making them unique...")
             df.columns = [f"{col}_{i}" if col in df.columns[:i].tolist() else col 
                          for i, col in enumerate(df.columns)]
         
@@ -825,8 +844,8 @@ def extract_sheet_data(worksheet):
         # Remove completely empty columns
         df = df.dropna(axis=1, how='all')
         
-        print(f"✅ Successfully extracted {len(df)} rows of data")
-        print(f"\n📋 Column names:")
+        print(f"Γ£à Successfully extracted {len(df)} rows of data")
+        print(f"\n≡ƒôï Column names:")
         for i, col in enumerate(df.columns, 1):
             print(f"   {i}. {col}")
         
@@ -835,7 +854,7 @@ def extract_sheet_data(worksheet):
         for col in df.columns:
             if str(col).strip().lower() in ['hub status', 'status', 'hub_status']:
                 hub_status_column = col
-                print(f"\n✅ Found 'Hub Status' column: '{col}'")
+                print(f"\nΓ£à Found 'Hub Status' column: '{col}'")
                 break
         
         if hub_status_column:
@@ -844,10 +863,10 @@ def extract_sheet_data(worksheet):
             status_mask = df[hub_status_column].astype(str).str.strip().str.lower() == 'active'
             df = df[status_mask].copy()
             after_status_filter = len(df)
-            print(f"   📊 Filtered by Hub Status='Active': {before_status_filter} → {after_status_filter} rows")
-            print(f"   ⚠️ Removed {before_status_filter - after_status_filter} rows with non-Active status")
+            print(f"   ≡ƒôè Filtered by Hub Status='Active': {before_status_filter} ΓåÆ {after_status_filter} rows")
+            print(f"   ΓÜá∩╕Å Removed {before_status_filter - after_status_filter} rows with non-Active status")
         else:
-            print(f"\n⚠️ Warning: 'Hub Status' column not found. Proceeding without status filter.")
+            print(f"\nΓÜá∩╕Å Warning: 'Hub Status' column not found. Proceeding without status filter.")
             print(f"   Available columns: {list(df.columns)}")
         
         # Find the hub column - specifically look for "Hub Name"
@@ -855,7 +874,7 @@ def extract_sheet_data(worksheet):
         for col in df.columns:
             if str(col).strip().lower() == 'hub name':
                 hub_column = col
-                print(f"\n✅ Found 'Hub Name' column: '{col}'")
+                print(f"\nΓ£à Found 'Hub Name' column: '{col}'")
                 break
         
         # If not found, try the find_hub_column function as fallback
@@ -865,7 +884,7 @@ def extract_sheet_data(worksheet):
                 print(f"   Hub column identified by pattern matching: '{hub_column}'")
         
         if hub_column:
-            print(f"\n🔍 Filtering data for {len(HUBS)} specific hubs...")
+            print(f"\n≡ƒöì Filtering data for {len(HUBS)} specific hubs...")
             print(f"   Hub column: '{hub_column}'")
             
             # Filter rows that exactly match or contain any of our 21 hubs
@@ -930,7 +949,7 @@ def extract_sheet_data(worksheet):
                 filtered_df = filtered_df.drop(columns=['_hub_normalized'])
                 after_dedup = len(filtered_df)
                 if before_dedup != after_dedup:
-                    print(f"   ⚠️ Removed {before_dedup - after_dedup} duplicate hub entries (kept first occurrence)")
+                    print(f"   ΓÜá∩╕Å Removed {before_dedup - after_dedup} duplicate hub entries (kept first occurrence)")
             
             print(f"   Found {len(filtered_df)} rows matching hub names")
             print(f"   Filtered out {len(df) - len(filtered_df)} rows")
@@ -949,7 +968,7 @@ def extract_sheet_data(worksheet):
             # Add latest date columns (Collection and Gap)
             latest_date_column_mapping = {}
             if latest_date_columns:
-                print(f"\n📅 Adding latest date columns...")
+                print(f"\n≡ƒôà Adding latest date columns...")
                 for col_name, col_info in latest_date_columns.items():
                     col_idx = col_info['column_index']
                     original_header = col_info['header']
@@ -968,11 +987,11 @@ def extract_sheet_data(worksheet):
                         formatted_date = format_date_for_column(col_info['date'])
                         dest_col_name = f"{display_name} {formatted_date}"
                         latest_date_column_mapping[actual_col_name] = dest_col_name
-                        print(f"   ✅ Column {col_idx}: '{original_header}' -> '{dest_col_name}'")
+                        print(f"   Γ£à Column {col_idx}: '{original_header}' -> '{dest_col_name}'")
                     else:
-                        print(f"   ⚠️ Column index {col_idx} out of range for '{col_name}'")
+                        print(f"   ΓÜá∩╕Å Column index {col_idx} out of range for '{col_name}'")
             else:
-                print(f"\n⚠️ No latest date columns found to add")
+                print(f"\nΓÜá∩╕Å No latest date columns found to add")
             
             # Create final DataFrame with only selected columns
             final_df = filtered_df[columns_to_keep].copy()
@@ -988,13 +1007,13 @@ def extract_sheet_data(worksheet):
             
             if column_mapping:
                 final_df = final_df.rename(columns=column_mapping)
-                print(f"\n📝 Renamed columns for consistency:")
+                print(f"\n≡ƒô¥ Renamed columns for consistency:")
                 for old_name, new_name in column_mapping.items():
                     print(f"   '{old_name}' -> '{new_name}'")
             
             # Reorder columns: Move Colc Date and Gap Date to the end (they should be the LAST two columns)
             if latest_date_column_mapping:
-                print(f"\n📋 Reordering columns to place latest date columns at the end...")
+                print(f"\n≡ƒôï Reordering columns to place latest date columns at the end...")
                 current_columns = list(final_df.columns)
                 
                 # Find the latest date column names (after renaming)
@@ -1008,37 +1027,37 @@ def extract_sheet_data(worksheet):
                 
                 # Reorder the DataFrame
                 final_df = final_df[reordered_columns]
-                print(f"   ✅ Columns reordered. Latest date columns placed at the end: {latest_date_col_names}")
-                print(f"   📋 Final column order: {list(final_df.columns)}")
+                print(f"   Γ£à Columns reordered. Latest date columns placed at the end: {latest_date_col_names}")
+                print(f"   ≡ƒôï Final column order: {list(final_df.columns)}")
             
             # Show which hubs were found (hub column won't be renamed, so use original name)
             found_hubs = final_df[hub_column].unique() if hub_column in final_df.columns else []
-            print(f"\n📌 Hubs found in data ({len(found_hubs)}):")
+            print(f"\n≡ƒôî Hubs found in data ({len(found_hubs)}):")
             for hub in sorted(found_hubs):
-                print(f"   ✓ {hub}")
+                print(f"   Γ£ô {hub}")
             
             # Show which hubs are missing
             if len(found_hubs) > 0:
                 missing_hubs = [h for h in HUBS if not any(h.lower() in str(fh).lower() for fh in found_hubs)]
                 if missing_hubs:
-                    print(f"\n⚠️ Hubs not found in data ({len(missing_hubs)}):")
+                    print(f"\nΓÜá∩╕Å Hubs not found in data ({len(missing_hubs)}):")
                     for hub in missing_hubs:
-                        print(f"   ✗ {hub}")
+                        print(f"   Γ£ù {hub}")
             
             # Show summary of extracted columns
-            print(f"\n📊 Final columns in report ({len(final_df.columns)}):")
+            print(f"\n≡ƒôè Final columns in report ({len(final_df.columns)}):")
             for i, col in enumerate(final_df.columns, 1):
                 print(f"   {i}. {col}")
             
             return final_df
         else:
-            print("\n⚠️ Warning: Could not identify hub column")
+            print("\nΓÜá∩╕Å Warning: Could not identify hub column")
             print("   Returning all data without filtering")
             print("   Available columns:", list(df.columns))
             return df
         
     except Exception as e:
-        print(f"❌ Error extracting data: {e}")
+        print(f"Γ¥î Error extracting data: {e}")
         raise
 
 
@@ -1046,10 +1065,10 @@ def generate_report(df, output_file):
     """Generate Excel report from DataFrame"""
     try:
         if df.empty:
-            print("⚠️ Warning: No data to export")
+            print("ΓÜá∩╕Å Warning: No data to export")
             return
         
-        print(f"\n📝 Generating report: {output_file}")
+        print(f"\n≡ƒô¥ Generating report: {output_file}")
         
         # Create Excel writer with formatting
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
@@ -1083,11 +1102,11 @@ def generate_report(df, output_file):
                 adjusted_width = min(max_length + 2, 50)
                 worksheet.column_dimensions[column_letter].width = adjusted_width
         
-        print(f"✅ Report generated successfully: {output_file}")
-        print(f"📁 File location: {os.path.abspath(output_file)}")
+        print(f"Γ£à Report generated successfully: {output_file}")
+        print(f"≡ƒôü File location: {os.path.abspath(output_file)}")
         
     except Exception as e:
-        print(f"❌ Error generating report: {e}")
+        print(f"Γ¥î Error generating report: {e}")
         raise
 
 
@@ -1095,11 +1114,11 @@ def display_summary(df):
     """Display summary statistics of the data"""
     try:
         if df.empty:
-            print("\n⚠️ No data to summarize")
+            print("\nΓÜá∩╕Å No data to summarize")
             return
         
         print(f"\n{'='*60}")
-        print("📊 DATA SUMMARY")
+        print("≡ƒôè DATA SUMMARY")
         print(f"{'='*60}")
         print(f"Total Rows (filtered by hubs): {len(df)}")
         print(f"Total Columns: {len(df.columns)}")
@@ -1113,7 +1132,7 @@ def display_summary(df):
         
         # Display first few rows
         print(f"\n{'='*60}")
-        print("📋 PREVIEW (First 5 rows)")
+        print("≡ƒôï PREVIEW (First 5 rows)")
         print(f"{'='*60}")
         print(df.head().to_string())
         
@@ -1123,7 +1142,7 @@ def display_summary(df):
         
         if available_cols:
             print(f"\n{'='*60}")
-            print("📈 EXTRACTED COLUMNS SUMMARY")
+            print("≡ƒôê EXTRACTED COLUMNS SUMMARY")
             print(f"{'='*60}")
             
             # Convert to numeric and show statistics
@@ -1143,12 +1162,12 @@ def display_summary(df):
         numeric_cols = df.select_dtypes(include=['number']).columns
         if len(numeric_cols) > 0:
             print(f"\n{'='*60}")
-            print("📈 ALL NUMERIC COLUMNS SUMMARY")
+            print("≡ƒôê ALL NUMERIC COLUMNS SUMMARY")
             print(f"{'='*60}")
             print(df[numeric_cols].describe().to_string())
         
     except Exception as e:
-        print(f"⚠️ Error displaying summary: {e}")
+        print(f"ΓÜá∩╕Å Error displaying summary: {e}")
 
 
 def read_previous_actual_gap_values(worksheet, hub_column_name):
@@ -1198,7 +1217,7 @@ def read_previous_actual_gap_values(worksheet, hub_column_name):
                 if val is None or val == '':
                     return 0
                 if isinstance(val, str):
-                    val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                    val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
                 return pd.to_numeric(val, errors='coerce') or 0
             except:
                 return 0
@@ -1214,10 +1233,10 @@ def read_previous_actual_gap_values(worksheet, hub_column_name):
                 actual_gap_value = safe_to_numeric(row[actual_gap_idx])
             previous_values[hub_name] = actual_gap_value
         
-        print(f"   📊 Read {len(previous_values)} previous Actual Gap values")
+        print(f"   ≡ƒôè Read {len(previous_values)} previous Actual Gap values")
         return previous_values
     except Exception as e:
-        print(f"   ⚠️ Error reading previous Actual Gap values: {e}")
+        print(f"   ΓÜá∩╕Å Error reading previous Actual Gap values: {e}")
         return {}
 
 
@@ -1233,7 +1252,7 @@ def compare_actual_gap_changes(new_df, previous_values, hub_column_name):
             if pd.isna(val) or val == '' or val is None:
                 return 0
             if isinstance(val, str):
-                val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
             return pd.to_numeric(val, errors='coerce') or 0
         except:
             return 0
@@ -1244,7 +1263,7 @@ def compare_actual_gap_changes(new_df, previous_values, hub_column_name):
     # Ensure excluded columns are not part of the comparison (they shouldn't be, but explicit check)
     for col in EXCLUDED_COLUMNS:
         if col in new_df.columns:
-            print(f"   ℹ️  Excluding '{col}' from email comparison (as requested)")
+            print(f"   Γä╣∩╕Å  Excluding '{col}' from email comparison (as requested)")
     
     # Create case-insensitive lookup for previous values
     previous_values_lower = {}
@@ -1279,7 +1298,7 @@ def compare_actual_gap_changes(new_df, previous_values, hub_column_name):
                 'new_value': new_value,
                 'deviation': deviation
             })
-            print(f"      ⚠️ Increase detected: {hub_name} - ₹{previous_value:,} → ₹{new_value:,} (+₹{deviation:,})")
+            print(f"      ΓÜá∩╕Å Increase detected: {hub_name} - Γé╣{previous_value:,} ΓåÆ Γé╣{new_value:,} (+Γé╣{deviation:,})")
     
     return increases
 
@@ -1294,7 +1313,7 @@ def build_actual_gap_trends(new_df, previous_values, hub_column_name):
             if pd.isna(val) or val == '' or val is None:
                 return 0
             if isinstance(val, str):
-                val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
             return pd.to_numeric(val, errors='coerce') or 0
         except:
             return 0
@@ -1337,11 +1356,157 @@ def build_actual_gap_trends(new_df, previous_values, hub_column_name):
     return trends, stats
 
 
-def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False):
-    """Create HTML email template with full table (same style as reservations_email_automation.py)"""
+def html_to_image_bytes(html_content):
+    """
+    Convert HTML content to PNG image bytes (base64).
+    Uses HTML_TO_IMAGE_SERVICE_URL if set (cloud), else local html_table_to_image (Selenium/Chrome).
+    Returns: (success, base64_string or None, error_message)
+    """
+    try:
+        # Option 1: Cloud HTML-to-Image service (no Chrome required)
+        if HTML_TO_IMAGE_SERVICE_URL and requests:
+            url = HTML_TO_IMAGE_SERVICE_URL.rstrip('/')
+            if not url.endswith('convert'):
+                url = f"{url}/convert"
+            try:
+                resp = requests.post(
+                    url,
+                    json={
+                        "html": html_content,
+                        "return_json": True,
+                        "raw_html": True,
+                        "crop_selector": ".container"
+                    },
+                    timeout=120
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get('success') and data.get('image_base64'):
+                    return True, data['image_base64'], None
+                return False, None, data.get('error', 'Conversion failed')
+            except Exception as e:
+                print(f"   ΓÜá∩╕Å Cloud HTML-to-image failed: {e}")
+                # Fall through to local
+
+        # Option 2: Local html_table_to_image (requires Chrome + Selenium)
+        try:
+            from html_table_to_image import html_to_image
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                output_path = tmp.name
+            try:
+                result = html_to_image(
+                    html_content=html_content,
+                    output_path=output_path,
+                    include_base64=True,
+                    raw_html=True,
+                    crop_selector=".container"
+                )
+                if result.get('success') and result.get('image_base64'):
+                    return True, result['image_base64'], None
+                return False, None, result.get('error', 'Conversion failed')
+            finally:
+                try:
+                    os.unlink(output_path)
+                except OSError:
+                    pass
+        except ImportError as e:
+            return False, None, f"html_table_to_image not found. Install: pip install selenium webdriver-manager pillow. Or set HTML_TO_IMAGE_SERVICE_URL for cloud."
+    except Exception as e:
+        return False, None, str(e)
+
+
+def send_whatsapp_image(html_content, caption=None):
+    """Convert HTML to image and send via WHAPI. Uses same format as the email."""
+    if not WHATSAPP_CONFIG['enabled']:
+        print("   ≡ƒô▒ WhatsApp disabled (WHATSAPP_ENABLED=0)")
+        return
+
+    token = WHATSAPP_CONFIG['token']
+    if not token:
+        print("   ΓÜá∩╕Å WHAPI_TOKEN not set - skipping WhatsApp send")
+        return
+
+    if not requests:
+        print("   Γ¥î 'requests' package required for WhatsApp. Install: pip install requests")
+        return
+
+    print("   ≡ƒô▒ Converting HTML to image for WhatsApp...")
+    success, img_base64, err = html_to_image_bytes(html_content)
+    if not success:
+        print(f"   Γ¥î WhatsApp: HTML to image failed: {err}")
+        return
+
+    media_value = f"data:image/png;base64,{img_base64}"
+    if caption is None:
+        caption = f"South COD Monitor - {datetime.now().strftime('%d-%b-%Y %H:%M')}"
+
+    payload = {
+        "to": WHATSAPP_CONFIG['recipient_phone'],
+        "caption": caption,
+        "media": media_value
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        print(f"   ≡ƒôñ Sending image to WhatsApp ({WHATSAPP_CONFIG['recipient_phone']})...")
+        resp = requests.post(
+            WHATSAPP_CONFIG['api_url'],
+            json=payload,
+            headers=headers,
+            timeout=60
+        )
+        resp.raise_for_status()
+        print("   Γ£à WhatsApp image sent successfully!")
+    except requests.exceptions.RequestException as e:
+        print(f"   Γ¥î WhatsApp send failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                print(f"      Response: {e.response.text[:300]}")
+            except Exception:
+                pass
+
+
+def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False, whatsapp_mode=False):
+    """Create HTML email template with full table (same style as reservations_email_automation.py).
+    whatsapp_mode=True: larger fonts, tighter column widths for WhatsApp image."""
     today_date = datetime.now().strftime('%d-%b-%Y')
     time_str = datetime.now().strftime('%H:%M')
     trend_map = trend_map or {}
+    
+    # WhatsApp: compute compact widths, larger fonts, and scale up for bigger image
+    whatsapp_css = ""
+    if whatsapp_mode and df_data is not None and not df_data.empty and hub_column_name in df_data.columns:
+        scale = 2.0  # Scale factor for bigger WhatsApp image
+        max_hub_len = max((len(str(row.get(hub_column_name, '') or '')) for _, row in df_data.iterrows()), default=20)
+        hub_col_width = int(max(140, min(200, int(max_hub_len * 7))) * scale)
+        num_col_width = int(78 * scale)  # Numeric columns (fits Γé╣1,234,567)
+        total_width = hub_col_width + 9 * num_col_width  # Hub + 9 data columns
+        whatsapp_css = f"""
+        /* WhatsApp: bigger image (2x), hide footer */
+        body {{ padding: 12px; background: #ffffff !important; min-height: auto !important; }}
+        .container {{ max-width: {total_width}px !important; width: {total_width}px !important; overflow: visible !important; }}
+        .content {{ padding: 16px 20px; overflow: visible !important; }}
+        .header {{ padding: 20px 24px; }}
+        .header h1 {{ font-size: 36px !important; }}
+        .header p {{ font-size: 26px !important; margin: 6px 0 0 0; }}
+        .summary-title {{ font-size: 32px !important; margin-bottom: 16px; }}
+        .summary-section {{ margin-bottom: 20px; }}
+        table {{ font-size: 28px !important; table-layout: fixed !important; width: {total_width - 48}px !important; }}
+        th {{ font-size: 24px !important; padding: 16px 10px !important; }}
+        td {{ font-size: 26px !important; padding: 14px 10px !important; }}
+        th:first-child, td:first-child {{ width: {hub_col_width}px !important; min-width: {hub_col_width}px !important; font-size: 24px !important; }}
+        th:not(:first-child), td:not(:first-child) {{ width: {num_col_width}px !important; min-width: {num_col_width - 10}px !important; font-size: 26px !important; }}
+        .summary-section div {{ font-size: 28px !important; }}
+        .footer {{ display: none !important; }}
+        /* Force colorful trend symbols - high specificity for Chrome screenshot */
+        table td span.trend-up {{ color: #dc3545 !important; -webkit-text-fill-color: #dc3545 !important; }}
+        table td span.trend-down {{ color: #28a745 !important; -webkit-text-fill-color: #28a745 !important; }}
+        table td span.trend-same {{ color: #6c757d !important; -webkit-text-fill-color: #6c757d !important; }}
+        table td span.trend-na {{ color: #adb5bd !important; -webkit-text-fill-color: #adb5bd !important; }}
+        """
     
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1454,6 +1619,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
             max-width: 65px;
             text-align: center;
         }}
+        {whatsapp_css}
         @media only screen and (max-width: 600px) {{
             body {{
                 padding: 5px;
@@ -1555,7 +1721,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 South COD Monitor - Actual Gap Alert</h1>
+            <h1>≡ƒôè South COD Monitor - Actual Gap Alert</h1>
             <p>{today_date} at {time_str}</p>
         </div>
         <div class="content">
@@ -1564,12 +1730,12 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
     # Add trend legend instead of summary
     html += """
             <div class="summary-section">
-                <div class="summary-title">📈 Actual Gap Trend</div>
+                <div class="summary-title">≡ƒôê Actual Gap Trend</div>
                 <div style="font-size: 12px; color: #555;">
-                    <span style="color: #dc3545;"><strong>▲</strong></span> Increase&nbsp;&nbsp;
-                    <span style="color: #28a745;"><strong>▼</strong></span> Decrease&nbsp;&nbsp;
-                    <span style="color: #6c757d;"><strong>▶</strong></span> No Change&nbsp;&nbsp;
-                    <span style="color: #adb5bd;"><strong>•</strong></span> No History
+                    <span style="color: #dc3545;"><strong>Γû▓</strong></span> Increase&nbsp;&nbsp;
+                    <span style="color: #28a745;"><strong>Γû╝</strong></span> Decrease&nbsp;&nbsp;
+                    <span style="color: #6c757d;"><strong>Γû╢</strong></span> No Change&nbsp;&nbsp;
+                    <span style="color: #adb5bd;"><strong>ΓÇó</strong></span> No History
                 </div>
             </div>
 """
@@ -1578,7 +1744,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
     if df_data is not None and not df_data.empty and hub_column_name in df_data.columns:
         html += """
             <div class="summary-section">
-                <div class="summary-title">📊 Complete COD Monitor Data</div>
+                <div class="summary-title">≡ƒôè Complete COD Monitor Data</div>
                 <div class="table-wrapper">
                 <table style="width: 100%; font-size: 11px; border-collapse: collapse; table-layout: auto;">
                     <tr>
@@ -1603,7 +1769,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
                 if pd.isna(val) or val == '' or val is None:
                     return 0
                 if isinstance(val, str):
-                    val = val.replace(',', '').replace('₹', '').replace(' ', '').strip()
+                    val = val.replace(',', '').replace('Γé╣', '').replace(' ', '').strip()
                 return float(val) if val else 0
             except:
                 return 0
@@ -1627,25 +1793,25 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
                 
                 # Format the total
                 if total_value == int(total_value):
-                    formatted_value = f'₹{int(total_value):,}'
+                    formatted_value = f'Γé╣{int(total_value):,}'
                 else:
-                    formatted_value = f'₹{total_value:,.2f}'
+                    formatted_value = f'Γé╣{total_value:,.2f}'
                 html += f'                        <td style="text-align: right; font-weight: bold; background: #e3f2fd; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
             else:
                 html += '                        <td style="text-align: right; font-weight: bold; background: #e3f2fd; font-size: 10px; padding: 6px 4px;">-</td>\n'
         
         html += '                    </tr>\n'
         
-        # Helper for trend icon next to Actual Gap
+        # Helper for trend icon next to Actual Gap (classes ensure colors render in WhatsApp image)
         def get_trend_icon(trend):
-            # Use heavier symbol set with color in cells for visibility
+            # Inline style + class for email; class + !important in CSS for WhatsApp image rendering
             if trend == 'up':
-                return " <span style='color: #dc3545; font-weight: bold;'>▲</span>"
+                return " <span class='trend-up' style='color: #dc3545; font-weight: bold;'>Γû▓</span>"
             if trend == 'down':
-                return " <span style='color: #28a745; font-weight: bold;'>▼</span>"
+                return " <span class='trend-down' style='color: #28a745; font-weight: bold;'>Γû╝</span>"
             if trend == 'same':
-                return " <span style='color: #6c757d; font-weight: bold;'>▶</span>"
-            return " <span style='color: #adb5bd; font-weight: bold;'>•</span>"
+                return " <span class='trend-same' style='color: #6c757d; font-weight: bold;'>Γû╢</span>"
+            return " <span class='trend-na' style='color: #adb5bd; font-weight: bold;'>ΓÇó</span>"
         
         # Add data rows (excluding total row)
         for idx, row in df_data.iterrows():
@@ -1669,18 +1835,18 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
                     else:
                         try:
                             if col == 'Last Deposit':
-                                num_value = float(str(value).replace(',', '').replace('₹', '').strip())
+                                num_value = float(str(value).replace(',', '').replace('Γé╣', '').strip())
                                 formatted_value = f'{int(num_value)}'
                                 if num_value > 1:
                                     formatted_value = f"<span style='color: #dc3545; font-weight: bold;'>{formatted_value}</span>"
                                 html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
                             else:
                                 # Format as number with currency
-                                num_value = float(str(value).replace(',', '').replace('₹', '').strip())
+                                num_value = float(str(value).replace(',', '').replace('Γé╣', '').strip())
                                 if num_value == int(num_value):
-                                    formatted_value = f'₹{int(num_value):,}'
+                                    formatted_value = f'Γé╣{int(num_value):,}'
                                 else:
-                                    formatted_value = f'₹{num_value:,.2f}'
+                                    formatted_value = f'Γé╣{num_value:,.2f}'
                                 if col == CALCULATED_COLUMN:
                                     html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}{get_trend_icon(trend)}</td>\n'
                                 else:
@@ -1707,7 +1873,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
     
     # Add test mode message only if test_mode is True
     if test_mode:
-        html += """            <p style='color: #dc3545; font-weight: bold;'>⚠️ TEST MODE - This is a test email. Recipients have been muted.</p>"""
+        html += """            <p style='color: #dc3545; font-weight: bold;'>ΓÜá∩╕Å TEST MODE - This is a test email. Recipients have been muted.</p>"""
     
     html += """        </div>
     </div>
@@ -1721,22 +1887,22 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
     """Send email with Actual Gap trend arrows (using same email config as reservations_email_automation.py)"""
     try:
         if not EMAIL_ENABLED or not EMAIL_CONFIG['sender_password']:
-            print(f"\n📧 Email sending is disabled or not configured")
+            print(f"\n≡ƒôº Email sending is disabled or not configured")
             return
         
-        print(f"\n📧 Preparing email with summary...")
+        print(f"\n≡ƒôº Preparing email with summary...")
         
         # Get email recipients dynamically (from G-Form_COD_Status.py)
         to_recipients, cc_recipients, bcc_recipients = get_email_recipients()
         
         # Check test mode
         if TEST_MODE:
-            print(f"   🧪 TEST MODE ENABLED - Recipients muted, sending to test email only")
+            print(f"   ≡ƒº¬ TEST MODE ENABLED - Recipients muted, sending to test email only")
             actual_to_recipients = [TEST_EMAIL]
             actual_cc_list = []
             actual_bcc_list = []
-            print(f"   📧 Test recipient: {TEST_EMAIL}")
-            print(f"   📧 Original recipients (muted): TO={len(to_recipients)} recipients, BCC={len(bcc_recipients)} recipients")
+            print(f"   ≡ƒôº Test recipient: {TEST_EMAIL}")
+            print(f"   ≡ƒôº Original recipients (muted): TO={len(to_recipients)} recipients, BCC={len(bcc_recipients)} recipients")
         else:
             # TO: All recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen)
             actual_to_recipients = to_recipients
@@ -1744,10 +1910,10 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
             actual_cc_list = []
             # BCC: Empty
             actual_bcc_list = bcc_recipients
-            print(f"   📧 Production mode - Sending to actual recipients")
-            print(f"   📧 To: {len(actual_to_recipients)} recipients")
-            print(f"   📧 CC: {len(actual_cc_list)} recipients")
-            print(f"   📧 BCC: {len(actual_bcc_list)} recipient(s)")
+            print(f"   ≡ƒôº Production mode - Sending to actual recipients")
+            print(f"   ≡ƒôº To: {len(actual_to_recipients)} recipients")
+            print(f"   ≡ƒôº CC: {len(actual_cc_list)} recipients")
+            print(f"   ≡ƒôº BCC: {len(actual_bcc_list)} recipient(s)")
         
         today_date = datetime.now().strftime('%d-%b')
         current_time = datetime.now().strftime('%H:%M')
@@ -1761,7 +1927,7 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
 
 """
         plain_text += "Actual Gap trend arrows are included in the HTML table.\n"
-        plain_text += "Legend: ▲ Increase, ▼ Decrease, ▶ No Change, • No History\n"
+        plain_text += "Legend: Γû▓ Increase, Γû╝ Decrease, Γû╢ No Change, ΓÇó No History\n"
         
         plain_text += f"\nView full report: {spreadsheet_url}\n"
         
@@ -1799,14 +1965,14 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
         for attempt in range(1, max_retries + 1):
             try:
                 mode_indicator = "[TEST MODE] " if TEST_MODE else ""
-                print(f"   📤 {mode_indicator}Attempt {attempt}/{max_retries}: Sending email...")
+                print(f"   ≡ƒôñ {mode_indicator}Attempt {attempt}/{max_retries}: Sending email...")
                 print(f"      To: {len(actual_to_recipients)} recipient(s)")
                 if actual_cc_list:
                     print(f"      CC: {len(actual_cc_list)} recipients")
                 if actual_bcc_list:
                     print(f"      BCC: {len(actual_bcc_list)} recipient(s)")
                 if TEST_MODE:
-                    print(f"      ⚠️  Original recipients muted (not receiving email)")
+                    print(f"      ΓÜá∩╕Å  Original recipients muted (not receiving email)")
                 
                 server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'], timeout=timeout)
                 server.timeout = timeout
@@ -1817,29 +1983,33 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
                 server.sendmail(EMAIL_CONFIG['sender_email'], all_recipients, text)
                 server.quit()
                 
-                print(f"   ✅ Email sent successfully")
+                print(f"   Γ£à Email sent successfully")
                 if trend_stats:
-                    print(f"   📊 Trend summary: ▲ {trend_stats.get('up', 0)}, ▼ {trend_stats.get('down', 0)}, ▶ {trend_stats.get('same', 0)}, • {trend_stats.get('na', 0)}")
+                    print(f"   ≡ƒôè Trend summary: Γû▓ {trend_stats.get('up', 0)}, Γû╝ {trend_stats.get('down', 0)}, Γû╢ {trend_stats.get('same', 0)}, ΓÇó {trend_stats.get('na', 0)}")
+                
+                # Send WhatsApp image with larger fonts and tighter columns (whatsapp_mode)
+                html_whatsapp = create_email_html_template(df_data, hub_column_name, trend_map=trend_map, test_mode=TEST_MODE, whatsapp_mode=True)
+                send_whatsapp_image(html_whatsapp)
                 return  # Success, exit function
                 
             except (smtplib.SMTPConnectError, smtplib.SMTPException, ConnectionError, TimeoutError, OSError) as e:
                 last_error = e
-                print(f"   ⚠️ Attempt {attempt}/{max_retries} failed: {e}")
+                print(f"   ΓÜá∩╕Å Attempt {attempt}/{max_retries} failed: {e}")
                 if attempt < max_retries:
                     wait_time = attempt * 5
-                    print(f"   ⏳ Waiting {wait_time} seconds before retry...")
+                    print(f"   ΓÅ│ Waiting {wait_time} seconds before retry...")
                     time.sleep(wait_time)
                 else:
-                    print(f"   ❌ Failed to send email after {max_retries} attempts")
+                    print(f"   Γ¥î Failed to send email after {max_retries} attempts")
                     
             except smtplib.SMTPAuthenticationError as e:
-                print(f"   ❌ Authentication failed: {e}")
+                print(f"   Γ¥î Authentication failed: {e}")
                 print(f"   Please check your Gmail App Password")
                 raise
                 
             except Exception as e:
                 last_error = e
-                print(f"   ❌ Unexpected error: {e}")
+                print(f"   Γ¥î Unexpected error: {e}")
                 if attempt < max_retries:
                     wait_time = attempt * 5
                     time.sleep(wait_time)
@@ -1850,7 +2020,7 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
             raise last_error
         
     except Exception as e:
-        print(f"   ❌ Error sending email: {e}")
+        print(f"   Γ¥î Error sending email: {e}")
         import traceback
         traceback.print_exc()
 
@@ -1865,46 +2035,46 @@ def upload_to_google_sheets(df, client):
     
     try:
         if df.empty:
-            print("⚠️ Warning: No data to upload to Google Sheets")
+            print("ΓÜá∩╕Å Warning: No data to upload to Google Sheets")
             return
         
         print(f"\n{'='*60}")
-        print("📤 UPLOADING TO GOOGLE SHEETS")
+        print("≡ƒôñ UPLOADING TO GOOGLE SHEETS")
         print(f"{'='*60}")
-        print(f"📋 Spreadsheet ID: {OUTPUT_SPREADSHEET_ID}")
-        print(f"📄 Worksheet Name: {OUTPUT_WORKSHEET_NAME}")
+        print(f"≡ƒôï Spreadsheet ID: {OUTPUT_SPREADSHEET_ID}")
+        print(f"≡ƒôä Worksheet Name: {OUTPUT_WORKSHEET_NAME}")
         
         # Open the output spreadsheet
         spreadsheet = client.open_by_key(OUTPUT_SPREADSHEET_ID)
-        print(f"✅ Opened spreadsheet: {spreadsheet.title}")
+        print(f"Γ£à Opened spreadsheet: {spreadsheet.title}")
         
         # Get or create the worksheet
         try:
             worksheet = spreadsheet.worksheet(OUTPUT_WORKSHEET_NAME)
             
             # Before clearing, preserve the manually editable columns
-            print(f"\n🔒 Preserving manually editable columns: {', '.join(PRESERVE_COLUMNS)}")
+            print(f"\n≡ƒöÆ Preserving manually editable columns: {', '.join(PRESERVE_COLUMNS)}")
             preserved_data = {}
             
             try:
                 # Read existing data directly using get_all_values() to avoid duplicate header issues
                 all_sheet_values = worksheet.get_all_values()
-                print(f"   📊 Worksheet has {len(all_sheet_values)} rows")
+                print(f"   ≡ƒôè Worksheet has {len(all_sheet_values)} rows")
                 
                 if len(all_sheet_values) < 2:
-                    print(f"   ⚠️  Worksheet appears empty or has no data rows (only {len(all_sheet_values)} row(s))")
-                    print(f"   ℹ️  This might be the first run - no data to preserve")
+                    print(f"   ΓÜá∩╕Å  Worksheet appears empty or has no data rows (only {len(all_sheet_values)} row(s))")
+                    print(f"   Γä╣∩╕Å  This might be the first run - no data to preserve")
                     existing_df = pd.DataFrame()
                     hub_col_existing = None
                 else:
-                    print(f"   ✅ Worksheet has data - proceeding to preserve values")
+                    print(f"   Γ£à Worksheet has data - proceeding to preserve values")
                     
                     # Parse data manually: Row 0 = Total, Row 1 = Header, Row 2+ = Data
                     header_row = all_sheet_values[1] if len(all_sheet_values) > 1 else []
                     data_rows = all_sheet_values[2:] if len(all_sheet_values) > 2 else []
                     
-                    print(f"   📋 Header row: {header_row[:5]}...")  # Show first 5 headers
-                    print(f"   📊 Data rows: {len(data_rows)} rows")
+                    print(f"   ≡ƒôï Header row: {header_row[:5]}...")  # Show first 5 headers
+                    print(f"   ≡ƒôè Data rows: {len(data_rows)} rows")
                     
                     # Create DataFrame manually to avoid duplicate header issues
                     if header_row and data_rows:
@@ -1922,7 +2092,7 @@ def upload_to_google_sheets(df, client):
                         
                         # Create DataFrame with unique headers
                         existing_df = pd.DataFrame(data_rows, columns=unique_headers)
-                        print(f"   📊 DataFrame created with {len(existing_df)} rows and {len(existing_df.columns)} columns")
+                        print(f"   ≡ƒôè DataFrame created with {len(existing_df)} rows and {len(existing_df.columns)} columns")
                         
                         # Find hub column in existing data (check original header names)
                         hub_col_existing = None
@@ -1930,12 +2100,12 @@ def upload_to_google_sheets(df, client):
                             original_header = header_row[idx] if idx < len(header_row) else col
                             if str(original_header).strip().lower() in ['hub name', 'hub', 'hub_name']:
                                 hub_col_existing = col
-                                print(f"   ✅ Found Hub column: '{col}' (original: '{original_header}')")
+                                print(f"   Γ£à Found Hub column: '{col}' (original: '{original_header}')")
                                 break
                         
                         # Read previous Actual Gap values for comparison (before clearing)
                         if hub_col_existing:
-                            print("   📥 Reading previous Actual Gap values from destination sheet...")
+                            print("   ≡ƒôÑ Reading previous Actual Gap values from destination sheet...")
                             previous_actual_gap_values = read_previous_actual_gap_values(worksheet, hub_col_existing)
                     else:
                         existing_df = pd.DataFrame()
@@ -1947,14 +2117,14 @@ def upload_to_google_sheets(df, client):
                         header_row = all_sheet_values[1] if len(all_sheet_values) > 1 else []
                         data_rows = all_sheet_values[2:] if len(all_sheet_values) > 2 else []
                         
-                        print(f"   📋 Header row: {header_row[:10]}...")  # Show first 10 headers
-                        print(f"   📊 Data rows: {len(data_rows)} rows found")
+                        print(f"   ≡ƒôï Header row: {header_row[:10]}...")  # Show first 10 headers
+                        print(f"   ≡ƒôè Data rows: {len(data_rows)} rows found")
                         
                         # Find column indices in the original header row
                         hub_col_idx = None
                         preserve_col_indices = {}
                         
-                        print(f"   🔍 Searching for columns in header row...")
+                        print(f"   ≡ƒöì Searching for columns in header row...")
                         for idx, header in enumerate(header_row):
                             header_str = str(header).strip()
                             header_lower = header_str.lower()
@@ -1962,22 +2132,22 @@ def upload_to_google_sheets(df, client):
                             # Check for hub column
                             if header_lower in ['hub name', 'hub', 'hub_name']:
                                 hub_col_idx = idx
-                                print(f"      ✅ Found Hub column at index {idx}: '{header_str}'")
+                                print(f"      Γ£à Found Hub column at index {idx}: '{header_str}'")
                             
                             # Check for preserve columns (exact match)
                             for preserve_col in PRESERVE_COLUMNS:
                                 if header_str == preserve_col:
                                     preserve_col_indices[preserve_col] = idx
-                                    print(f"      ✅ Found '{preserve_col}' column at index {idx}")
+                                    print(f"      Γ£à Found '{preserve_col}' column at index {idx}")
                         
                         # Debug: Show what columns we're looking for vs what we found
-                        print(f"   📋 Looking for preserve columns: {PRESERVE_COLUMNS}")
-                        print(f"   📋 Found preserve columns: {list(preserve_col_indices.keys())}")
+                        print(f"   ≡ƒôï Looking for preserve columns: {PRESERVE_COLUMNS}")
+                        print(f"   ≡ƒôï Found preserve columns: {list(preserve_col_indices.keys())}")
                         if not preserve_col_indices:
-                            print(f"   ⚠️  No preserve columns found! Available headers: {header_row}")
+                            print(f"   ΓÜá∩╕Å  No preserve columns found! Available headers: {header_row}")
                         
                         if hub_col_idx is None:
-                            print(f"   ⚠️  Hub column not found! Available headers: {header_row[:10]}")
+                            print(f"   ΓÜá∩╕Å  Hub column not found! Available headers: {header_row[:10]}")
                         
                         # Read preserved values directly from sheet rows
                         for preserve_col in PRESERVE_COLUMNS:
@@ -1985,7 +2155,7 @@ def upload_to_google_sheets(df, client):
                                 col_idx = preserve_col_indices[preserve_col]
                                 preserved_data[preserve_col] = {}
                                 
-                                print(f"   📖 Reading '{preserve_col}' from column index {col_idx}...")
+                                print(f"   ≡ƒôû Reading '{preserve_col}' from column index {col_idx}...")
                                 rows_read = 0
                                 
                                 for row_idx, row in enumerate(data_rows):
@@ -2005,7 +2175,7 @@ def upload_to_google_sheets(df, client):
                                                 else:
                                                     try:
                                                         # Clean and convert to number
-                                                        clean_value = str(raw_value).replace(',', '').replace('₹', '').replace(' ', '').strip()
+                                                        clean_value = str(raw_value).replace(',', '').replace('Γé╣', '').replace(' ', '').strip()
                                                         if clean_value == '':
                                                             preserved_value = 0
                                                         else:
@@ -2027,25 +2197,25 @@ def upload_to_google_sheets(df, client):
                                                 if rows_read <= 3:
                                                     print(f"      Row {row_idx+3}: {hub_name} = {raw_value} -> {preserved_value}")
                                             else:
-                                                print(f"      ⚠️  Row {row_idx+3}: Column index {col_idx} out of range (row length: {len(row)})")
+                                                print(f"      ΓÜá∩╕Å  Row {row_idx+3}: Column index {col_idx} out of range (row length: {len(row)})")
                                 
-                                print(f"   📊 Read {rows_read} values for '{preserve_col}'")
+                                print(f"   ≡ƒôè Read {rows_read} values for '{preserve_col}'")
                                 
                                 # Count preserved values by type
                                 total_count = len(preserved_data[preserve_col])
                                 zero_count = sum(1 for v in preserved_data[preserve_col].values() if v == 0 or v == '0')
                                 non_zero_count = total_count - zero_count
                                 
-                                print(f"   ✅ Preserved '{preserve_col}': {total_count} values ({non_zero_count} non-zero, {zero_count} zeros)")
+                                print(f"   Γ£à Preserved '{preserve_col}': {total_count} values ({non_zero_count} non-zero, {zero_count} zeros)")
                                 
                                 # Debug: Show all preserved values (not just samples) to verify they're captured
                                 if preserved_data[preserve_col]:
-                                    print(f"      📋 All preserved values for '{preserve_col}':")
+                                    print(f"      ≡ƒôï All preserved values for '{preserve_col}':")
                                     for hub, val in sorted(preserved_data[preserve_col].items()):
-                                        print(f"         • {hub}: {val}")
+                                        print(f"         ΓÇó {hub}: {val}")
                             elif preserve_col in existing_df.columns and not existing_df.empty:
                                 # Fallback: use DataFrame if column index not found
-                                print(f"   ⚠️  Column '{preserve_col}' not found via direct reading, using DataFrame fallback...")
+                                print(f"   ΓÜá∩╕Å  Column '{preserve_col}' not found via direct reading, using DataFrame fallback...")
                                 preserved_data[preserve_col] = {}
                                 for idx, row in existing_df.iterrows():
                                     hub_name = str(row[hub_col_existing]).strip() if pd.notna(row[hub_col_existing]) else ''
@@ -2058,7 +2228,7 @@ def upload_to_google_sheets(df, client):
                                             try:
                                                 # Convert to number if possible
                                                 if isinstance(preserve_value, str):
-                                                    clean = preserve_value.replace(',', '').replace('₹', '').strip()
+                                                    clean = preserve_value.replace(',', '').replace('Γé╣', '').strip()
                                                     preserve_value = float(clean) if clean else 0
                                                 preserve_value = int(preserve_value) if preserve_value == int(preserve_value) else preserve_value
                                             except:
@@ -2069,42 +2239,42 @@ def upload_to_google_sheets(df, client):
                                 total_count = len(preserved_data[preserve_col])
                                 zero_count = sum(1 for v in preserved_data[preserve_col].values() if v == 0 or v == '0')
                                 non_zero_count = total_count - zero_count
-                                print(f"   ✅ Preserved '{preserve_col}': {total_count} values ({non_zero_count} non-zero, {zero_count} zeros) using DataFrame fallback")
+                                print(f"   Γ£à Preserved '{preserve_col}': {total_count} values ({non_zero_count} non-zero, {zero_count} zeros) using DataFrame fallback")
                                 
                                 # Show all preserved values
                                 if preserved_data[preserve_col]:
-                                    print(f"      📋 All preserved values for '{preserve_col}':")
+                                    print(f"      ≡ƒôï All preserved values for '{preserve_col}':")
                                     for hub, val in sorted(preserved_data[preserve_col].items()):
-                                        print(f"         • {hub}: {val}")
+                                        print(f"         ΓÇó {hub}: {val}")
                             else:
-                                print(f"   ⚠️ Column '{preserve_col}' not found in existing data")
+                                print(f"   ΓÜá∩╕Å Column '{preserve_col}' not found in existing data")
                                 if not existing_df.empty:
                                     print(f"      Available columns: {list(existing_df.columns)}")
                     
                     # Summary of all preserved data
                     if preserved_data:
                         total_preserved = sum(len(v) for v in preserved_data.values())
-                        print(f"\n   📊 Preservation Summary: {total_preserved} total values preserved across {len(preserved_data)} columns")
+                        print(f"\n   ≡ƒôè Preservation Summary: {total_preserved} total values preserved across {len(preserved_data)} columns")
                         for col, values in preserved_data.items():
                             non_zero = sum(1 for v in values.values() if v != 0 and v != '0')
                             zeros = len(values) - non_zero
-                            print(f"      • {col}: {len(values)} values ({non_zero} non-zero, {zeros} zeros)")
+                            print(f"      ΓÇó {col}: {len(values)} values ({non_zero} non-zero, {zeros} zeros)")
                     else:
-                        print(f"   ⚠️ Could not find hub column in existing data to preserve columns")
+                        print(f"   ΓÜá∩╕Å Could not find hub column in existing data to preserve columns")
             except Exception as e:
-                print(f"   ⚠️ Could not read existing data to preserve columns: {e}")
+                print(f"   ΓÜá∩╕Å Could not read existing data to preserve columns: {e}")
                 print(f"   Continuing with upload (new worksheet or empty sheet)")
             
             # Clear existing data completely
             worksheet.clear()
-            print(f"✅ Cleared existing data from worksheet '{OUTPUT_WORKSHEET_NAME}'")
+            print(f"Γ£à Cleared existing data from worksheet '{OUTPUT_WORKSHEET_NAME}'")
             time.sleep(1)  # Small delay to ensure clear operation completes
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title=OUTPUT_WORKSHEET_NAME, rows=1000, cols=20)
-            print(f"✅ Created new worksheet '{OUTPUT_WORKSHEET_NAME}'")
+            print(f"Γ£à Created new worksheet '{OUTPUT_WORKSHEET_NAME}'")
         
         # Convert all columns to standard Python types to avoid JSON serialization errors
-        print("🔄 Preparing data for upload...")
+        print("≡ƒöä Preparing data for upload...")
         def convert_to_serializable(obj):
             if pd.isna(obj) or obj is None:
                 return None
@@ -2129,7 +2299,7 @@ def upload_to_google_sheets(df, client):
         
         # Add preserved columns to the upload DataFrame
         if hub_col_upload and preserved_data:
-            print(f"\n📝 Merging preserved columns into upload data...")
+            print(f"\n≡ƒô¥ Merging preserved columns into upload data...")
             for preserve_col in PRESERVE_COLUMNS:
                 # Initialize column with None (will be filled with preserved values or 0)
                 df_upload[preserve_col] = None
@@ -2174,10 +2344,10 @@ def upload_to_google_sheets(df, client):
                     non_zero_count = (df_upload[preserve_col] != 0).sum()
                     zero_count = (df_upload[preserve_col] == 0).sum()
                     
-                    print(f"   ✅ Merged '{preserve_col}': {total_hubs} hubs processed ({non_zero_count} non-zero, {zero_count} zeros)")
+                    print(f"   Γ£à Merged '{preserve_col}': {total_hubs} hubs processed ({non_zero_count} non-zero, {zero_count} zeros)")
                     
                     # Show merged values for first few hubs to verify preservation
-                    print(f"      📋 Sample merged values (first 5 hubs):")
+                    print(f"      ≡ƒôï Sample merged values (first 5 hubs):")
                     sample_count = 0
                     for idx, row in df_upload.iterrows():
                         if sample_count >= 5:
@@ -2185,19 +2355,19 @@ def upload_to_google_sheets(df, client):
                         hub_name = str(row[hub_col_upload]).strip() if pd.notna(row[hub_col_upload]) else ''
                         if hub_name and hub_name.lower() != 'total':
                             value = row[preserve_col]
-                            print(f"         • {hub_name}: {value}")
+                            print(f"         ΓÇó {hub_name}: {value}")
                             sample_count += 1
                 else:
                     # No preserved data - initialize with 0
                     df_upload[preserve_col] = 0
-                    print(f"   ⚠️ No preserved data for '{preserve_col}' - initialized with 0")
+                    print(f"   ΓÜá∩╕Å No preserved data for '{preserve_col}' - initialized with 0")
         
         # Calculate "Actual Gap" = Overall Gap - (Van Adhoc + Legal Issue + Old Balance + Gap Date)
-        print(f"\n🧮 Calculating '{CALCULATED_COLUMN}'...")
+        print(f"\n≡ƒº« Calculating '{CALCULATED_COLUMN}'...")
         try:
             # Ensure all required columns exist
             if 'Overall Gap' not in df_upload.columns:
-                print(f"   ⚠️ 'Overall Gap' column not found, cannot calculate '{CALCULATED_COLUMN}'")
+                print(f"   ΓÜá∩╕Å 'Overall Gap' column not found, cannot calculate '{CALCULATED_COLUMN}'")
             else:
                 # Ensure preserved columns exist (fill None/NaN with 0 only for calculation, but keep original preserved values)
                 for col in PRESERVE_COLUMNS:
@@ -2215,9 +2385,9 @@ def upload_to_google_sheets(df, client):
                     if 'Gap ' in col_str and col != 'Overall Gap':
                         gap_date_col = col
                 if gap_date_col:
-                    print(f"   📅 Found Gap date column: '{gap_date_col}'")
+                    print(f"   ≡ƒôà Found Gap date column: '{gap_date_col}'")
                 else:
-                    print(f"   ⚠️ Gap date column not found, will use 0 for calculation")
+                    print(f"   ΓÜá∩╕Å Gap date column not found, will use 0 for calculation")
                 
                 # Convert to numeric, handling errors
                 def safe_to_numeric(val):
@@ -2226,7 +2396,7 @@ def upload_to_google_sheets(df, client):
                             return 0
                         # Remove currency symbols and commas
                         if isinstance(val, str):
-                            val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                            val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
                         return pd.to_numeric(val, errors='coerce') or 0
                     except:
                         return 0
@@ -2241,17 +2411,17 @@ def upload_to_google_sheets(df, client):
                 if gap_date_col:
                     gap_date = df_upload[gap_date_col].apply(safe_to_numeric)
                     df_upload[CALCULATED_COLUMN] = overall_gap - (van_adhoc + legal_issue + old_balance + gap_date)
-                    print(f"   📝 Formula: Overall Gap - (Van Adhoc + Legal Issue + Old Balance + {gap_date_col})")
+                    print(f"   ≡ƒô¥ Formula: Overall Gap - (Van Adhoc + Legal Issue + Old Balance + {gap_date_col})")
                 else:
                     df_upload[CALCULATED_COLUMN] = overall_gap - (van_adhoc + legal_issue + old_balance)
-                    print(f"   📝 Formula: Overall Gap - (Van Adhoc + Legal Issue + Old Balance) [Gap Date column not found]")
+                    print(f"   ≡ƒô¥ Formula: Overall Gap - (Van Adhoc + Legal Issue + Old Balance) [Gap Date column not found]")
                 
                 # Count non-zero values
                 non_zero_count = (df_upload[CALCULATED_COLUMN] != 0).sum()
-                print(f"   ✅ Calculated '{CALCULATED_COLUMN}': {non_zero_count} non-zero values")
+                print(f"   Γ£à Calculated '{CALCULATED_COLUMN}': {non_zero_count} non-zero values")
                 
         except Exception as e:
-            print(f"   ⚠️ Error calculating '{CALCULATED_COLUMN}': {e}")
+            print(f"   ΓÜá∩╕Å Error calculating '{CALCULATED_COLUMN}': {e}")
             # Add empty column if calculation fails
             if CALCULATED_COLUMN not in df_upload.columns:
                 df_upload[CALCULATED_COLUMN] = None
@@ -2260,25 +2430,25 @@ def upload_to_google_sheets(df, client):
         increases_summary = []
         if hub_col_upload and CALCULATED_COLUMN in df_upload.columns:
             if previous_actual_gap_values:
-                print(f"\n📊 Comparing Actual Gap changes...")
-                print(f"   📋 Previous values found for {len(previous_actual_gap_values)} hubs")
+                print(f"\n≡ƒôè Comparing Actual Gap changes...")
+                print(f"   ≡ƒôï Previous values found for {len(previous_actual_gap_values)} hubs")
                 increases_summary = compare_actual_gap_changes(df_upload, previous_actual_gap_values, hub_col_upload)
                 if increases_summary:
-                    print(f"   ⚠️ Found {len(increases_summary)} hub(s) with increased Actual Gap:")
+                    print(f"   ΓÜá∩╕Å Found {len(increases_summary)} hub(s) with increased Actual Gap:")
                     for inc in increases_summary:
-                        print(f"      • {inc['hub_name']}: ₹{inc['previous_value']:,} → ₹{inc['new_value']:,} (+₹{inc['deviation']:,})")
+                        print(f"      ΓÇó {inc['hub_name']}: Γé╣{inc['previous_value']:,} ΓåÆ Γé╣{inc['new_value']:,} (+Γé╣{inc['deviation']:,})")
                 else:
-                    print(f"   ✅ No increases in Actual Gap detected")
+                    print(f"   Γ£à No increases in Actual Gap detected")
             else:
-                print(f"\n📊 No previous Actual Gap values found (first run or empty sheet)")
-                print(f"   ℹ️  Email will show trend arrows as 'No History'")
+                print(f"\n≡ƒôè No previous Actual Gap values found (first run or empty sheet)")
+                print(f"   Γä╣∩╕Å  Email will show trend arrows as 'No History'")
             
             trend_map, trend_stats = build_actual_gap_trends(df_upload, previous_actual_gap_values, hub_col_upload)
             if trend_stats:
-                print(f"   📈 Trend summary: ▲ {trend_stats.get('up', 0)}, ▼ {trend_stats.get('down', 0)}, ▶ {trend_stats.get('same', 0)}, • {trend_stats.get('na', 0)}")
+                print(f"   ≡ƒôê Trend summary: Γû▓ {trend_stats.get('up', 0)}, Γû╝ {trend_stats.get('down', 0)}, Γû╢ {trend_stats.get('same', 0)}, ΓÇó {trend_stats.get('na', 0)}")
         
         # Reorder columns to ensure correct order: Colc Date and Gap Date should be LAST
-        print(f"\n📋 Reordering columns for final upload...")
+        print(f"\n≡ƒôï Reordering columns for final upload...")
         current_columns = list(df_upload.columns)
         
         # Identify latest date columns (Colc Date and Gap Date)
@@ -2331,19 +2501,19 @@ def upload_to_google_sheets(df, client):
         
         # Reorder the DataFrame
         df_upload = df_upload[ordered_columns]
-        print(f"   ✅ Columns reordered. Latest date columns placed at the end: {latest_date_cols}")
-        print(f"   📋 Final column order: {list(df_upload.columns)}")
+        print(f"   Γ£à Columns reordered. Latest date columns placed at the end: {latest_date_cols}")
+        print(f"   ≡ƒôï Final column order: {list(df_upload.columns)}")
         
         # Sort by Actual Gap (descending - highest gap first)
         if CALCULATED_COLUMN in df_upload.columns:
-            print(f"\n📊 Sorting data by '{CALCULATED_COLUMN}' (descending)...")
+            print(f"\n≡ƒôè Sorting data by '{CALCULATED_COLUMN}' (descending)...")
             # Helper function to convert to numeric for sorting
             def safe_to_numeric_for_sort(val):
                 try:
                     if pd.isna(val) or val == '' or val is None:
                         return 0
                     if isinstance(val, str):
-                        val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                        val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
                     return pd.to_numeric(val, errors='coerce') or 0
                 except:
                     return 0
@@ -2354,9 +2524,9 @@ def upload_to_google_sheets(df, client):
             df_upload = df_upload.sort_values('_sort_key', ascending=False)
             # Remove temporary sort key column
             df_upload = df_upload.drop(columns=['_sort_key'])
-            print(f"   ✅ Data sorted by '{CALCULATED_COLUMN}' in descending order (highest to lowest)")
+            print(f"   Γ£à Data sorted by '{CALCULATED_COLUMN}' in descending order (highest to lowest)")
         else:
-            print(f"\n⚠️ '{CALCULATED_COLUMN}' column not found, skipping sort")
+            print(f"\nΓÜá∩╕Å '{CALCULATED_COLUMN}' column not found, skipping sort")
         
         # Helper function to convert to numeric
         def safe_to_numeric(val):
@@ -2364,13 +2534,13 @@ def upload_to_google_sheets(df, client):
                 if pd.isna(val) or val == '' or val is None:
                     return 0
                 if isinstance(val, str):
-                    val = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                    val = val.replace('Γé╣', '').replace(',', '').replace(' ', '').strip()
                 return pd.to_numeric(val, errors='coerce') or 0
             except:
                 return 0
         
         # Round all numeric values in df_upload first
-        print(f"\n🔢 Rounding all numeric values...")
+        print(f"\n≡ƒöó Rounding all numeric values...")
         numeric_cols_list = ['Total Collection', 'Total Deposit', 'Last Deposit', 'Overall Gap', CALCULATED_COLUMN] + PRESERVE_COLUMNS
         # Add latest date columns
         latest_date_cols_for_rounding = [col for col in df_upload.columns if 'Colc ' in str(col) or ('Gap ' in str(col) and col != 'Overall Gap')]
@@ -2383,10 +2553,10 @@ def upload_to_google_sheets(df, client):
                     lambda x: round(safe_to_numeric(x)) if pd.notna(x) and x != '' else x
                 )
         
-        print(f"   ✅ All numeric values rounded to whole numbers")
+        print(f"   Γ£à All numeric values rounded to whole numbers")
         
         # Create total row
-        print(f"\n📊 Creating total row...")
+        print(f"\n≡ƒôè Creating total row...")
         total_row = {}
         
         # Find hub name column (first column)
@@ -2411,18 +2581,18 @@ def upload_to_google_sheets(df, client):
         
         # Create DataFrame with total row
         total_df = pd.DataFrame([total_row])
-        print(f"   ✅ Total row created")
+        print(f"   Γ£à Total row created")
         
         # Upload: Total row first (row 1), then header + data (row 2 onwards)
-        print(f"\n📤 Uploading data to Google Sheets...")
+        print(f"\n≡ƒôñ Uploading data to Google Sheets...")
         # Upload total row first at row 1
         set_with_dataframe(worksheet, total_df, row=1, include_column_header=False)
         # Upload header + data starting from row 2
         set_with_dataframe(worksheet, df_upload, row=2, include_column_header=True)
-        print("✅ Data uploaded successfully")
+        print("Γ£à Data uploaded successfully")
         
         # Apply formatting
-        print("🎨 Applying formatting...")
+        print("≡ƒÄ¿ Applying formatting...")
         num_columns = len(df_upload.columns)
         num_data_rows = len(df_upload)
         
@@ -2480,11 +2650,11 @@ def upload_to_google_sheets(df, client):
                 col_idx = list(df_upload.columns).index(col_name)
                 col_letter = get_column_letter(col_idx)
                 
-                # Format as currency (₹) without decimals and right-aligned
+                # Format as currency (Γé╣) without decimals and right-aligned
                 # Row 1 is total row, Row 2 is header, Row 3 onwards is data
                 # Format total row (row 1) with yellow background
                 worksheet.format(f'{col_letter}1', {
-                    'numberFormat': {'type': 'CURRENCY', 'pattern': '₹#,##0'},
+                    'numberFormat': {'type': 'CURRENCY', 'pattern': 'Γé╣#,##0'},
                     'horizontalAlignment': 'RIGHT',
                     'textFormat': {'bold': True},
                     'backgroundColor': {'red': 1.0, 'green': 1.0, 'blue': 0.0}  # Yellow background
@@ -2493,7 +2663,7 @@ def upload_to_google_sheets(df, client):
                 # Format data rows (row 3 onwards)
                 if num_data_rows > 0:
                     worksheet.format(f'{col_letter}3:{col_letter}{num_data_rows + 2}', {
-                        'numberFormat': {'type': 'CURRENCY', 'pattern': '₹#,##0'},
+                        'numberFormat': {'type': 'CURRENCY', 'pattern': 'Γé╣#,##0'},
                         'horizontalAlignment': 'RIGHT'
                     })
 
@@ -2550,25 +2720,25 @@ def upload_to_google_sheets(df, client):
                 'horizontalAlignment': 'LEFT'
             })
         
-        print("✅ Formatting applied successfully")
+        print("Γ£à Formatting applied successfully")
         spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{OUTPUT_SPREADSHEET_ID}/edit#gid={worksheet.id}"
-        print(f"\n🔗 Google Sheet URL: {spreadsheet_url}")
+        print(f"\n≡ƒöù Google Sheet URL: {spreadsheet_url}")
         
         # Send email with Actual Gap trend arrows
         # Use df_upload (before total row is added) for email table
         # Always send email to show the full report
         if hub_col_upload:
-            print(f"\n📧 Preparing to send email...")
+            print(f"\n≡ƒôº Preparing to send email...")
             if trend_stats and trend_stats.get('up', 0) > 0:
-                print(f"   ⚠️ Alert: {trend_stats.get('up', 0)} hub(s) with increased Actual Gap will be highlighted")
+                print(f"   ΓÜá∩╕Å Alert: {trend_stats.get('up', 0)} hub(s) with increased Actual Gap will be highlighted")
             else:
-                print(f"   ℹ️  No increases detected - email will show full report with trend arrows")
+                print(f"   Γä╣∩╕Å  No increases detected - email will show full report with trend arrows")
             send_email_with_summary(df_upload, hub_col_upload, spreadsheet_url, trend_map=trend_map, trend_stats=trend_stats)
         else:
-            print(f"\n⚠️ Cannot send email: Hub column not found")
+            print(f"\nΓÜá∩╕Å Cannot send email: Hub column not found")
         
     except Exception as e:
-        print(f"❌ Error uploading to Google Sheets: {e}")
+        print(f"Γ¥î Error uploading to Google Sheets: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -2577,9 +2747,9 @@ def upload_to_google_sheets(df, client):
 def main():
     """Main function to run the South COD Monitor"""
     print("="*60)
-    print("🚀 SOUTH COD MONITOR")
+    print("≡ƒÜÇ SOUTH COD MONITOR")
     print("="*60)
-    print(f"📅 Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"≡ƒôà Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
     try:
@@ -2590,7 +2760,7 @@ def main():
         worksheet = get_worksheet_by_name(client, SPREADSHEET_ID, SOURCE_WORKSHEET_NAME)
         
         if not worksheet:
-            print("❌ Could not access worksheet. Exiting...")
+            print("Γ¥î Could not access worksheet. Exiting...")
             sys.exit(1)
         
         # Extract data
@@ -2600,7 +2770,7 @@ def main():
         df = add_last_deposit_column(df, client)
         
         if df.empty:
-            print("❌ No data extracted. Exiting...")
+            print("Γ¥î No data extracted. Exiting...")
             sys.exit(1)
         
         # Display summary
@@ -2613,39 +2783,39 @@ def main():
         upload_to_google_sheets(df, client)
         
         print(f"\n{'='*60}")
-        print("✅ PROCESS COMPLETED SUCCESSFULLY")
+        print("Γ£à PROCESS COMPLETED SUCCESSFULLY")
         print(f"{'='*60}")
-        print(f"📁 Excel report saved as: {OUTPUT_FILE}")
-        print(f"📊 Total rows processed: {len(df)}")
-        print(f"🏢 Hubs processed: {len(HUBS)}")
+        print(f"≡ƒôü Excel report saved as: {OUTPUT_FILE}")
+        print(f"≡ƒôè Total rows processed: {len(df)}")
+        print(f"≡ƒÅó Hubs processed: {len(HUBS)}")
         
         # Show hub column summary if available
         hub_column = find_hub_column(df)
         if hub_column and not df.empty:
             found_hubs = df[hub_column].unique()
-            print(f"✅ Hubs found in report: {len(found_hubs)}")
+            print(f"Γ£à Hubs found in report: {len(found_hubs)}")
         
         # Show extracted columns summary
         extracted_cols = ['Total Collection', 'Total Deposit', 'Overall Gap']
         available_cols = [col for col in extracted_cols if col in df.columns]
-        print(f"📋 Columns extracted: {len(available_cols)}/{len(extracted_cols)}")
+        print(f"≡ƒôï Columns extracted: {len(available_cols)}/{len(extracted_cols)}")
         for col in available_cols:
-            print(f"   ✓ {col}")
+            print(f"   Γ£ô {col}")
         missing_cols = [col for col in extracted_cols if col not in df.columns]
         if missing_cols:
-            print(f"⚠️ Missing columns:")
+            print(f"ΓÜá∩╕Å Missing columns:")
             for col in missing_cols:
-                print(f"   ✗ {col}")
+                print(f"   Γ£ù {col}")
         
-        print(f"\n📤 Data uploaded to Google Sheets:")
+        print(f"\n≡ƒôñ Data uploaded to Google Sheets:")
         print(f"   Spreadsheet: https://docs.google.com/spreadsheets/d/{OUTPUT_SPREADSHEET_ID}/edit")
         print(f"   Worksheet: {OUTPUT_WORKSHEET_NAME}")
         
-        print(f"\n📅 Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\n≡ƒôà Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
     except Exception as e:
         print(f"\n{'='*60}")
-        print("❌ ERROR OCCURRED")
+        print("Γ¥î ERROR OCCURRED")
         print(f"{'='*60}")
         print(f"Error: {str(e)}")
         import traceback
