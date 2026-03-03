@@ -151,17 +151,26 @@ TEST_MODE = False  # Set to True to mute recipients; only sender as TO (for test
 # Dashboard: https://whapi.cloud/
 # WHAPI /body/to must match: ^[\d-]{9,31}(@[\w\.]{1,})?$  (e.g. 919500055366 or 120363xxx@g.us)
 def _get_whatsapp_recipients():
-    """Return list of WhatsApp recipients. WHATSAPP_PHONE can be comma-separated (e.g. number1,number2@g.us)."""
+    """Return list of WhatsApp recipients. WHATSAPP_PHONE can be comma, newline, or semicolon separated."""
+    import re
     raw = os.getenv('WHATSAPP_PHONE', '919500055366')
     if not raw or not str(raw).strip():
         return ['919500055366']
-    parts = [p.strip().replace(' ', '').replace('\n', '').replace('\r', '').replace('+', '')
-             for p in str(raw).split(',') if p.strip()]
+    # Split by comma, newline, or semicolon; handle various whitespace
+    parts = re.split(r'[,\n\r;]+', str(raw))
     result = []
-    for s in parts:
+    for p in parts:
+        s = p.strip().replace(' ', '').replace('+', '')
         if s and len(s) >= 9:
             result.append(s[:31] if len(s) > 31 else s)
-    return result if result else ['919500055366']
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for r in result:
+        if r not in seen:
+            seen.add(r)
+            unique.append(r)
+    return unique if unique else ['919500055366']
 
 WHATSAPP_CONFIG = {
     'enabled': os.getenv('WHATSAPP_ENABLED', '1') == '1',  # Set WHATSAPP_ENABLED=0 to disable
@@ -1480,6 +1489,7 @@ def send_whatsapp_image(html_content, caption=None):
         caption = f"South COD Monitor - {_now_ist().strftime('%d-%b-%Y %H:%M')}"
 
     recipients = _get_whatsapp_recipients()
+    print(f"   >> Sending to {len(recipients)} recipient(s): {recipients}")
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -1495,7 +1505,9 @@ def send_whatsapp_image(html_content, caption=None):
         print(f"   [i] GitHub Actions detected - using timeout={timeout_sec}s, {max_attempts} attempts")
 
     success_count = 0
-    for recipient in recipients:
+    for i, recipient in enumerate(recipients):
+        if i > 0:
+            time.sleep(3)  # Brief delay between recipients (avoid WHAPI rate limit)
         payload = {"to": recipient, "caption": caption, "media": media_value}
         last_err = None
         for attempt in range(1, max_attempts + 1):
