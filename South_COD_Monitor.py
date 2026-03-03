@@ -150,21 +150,23 @@ TEST_MODE = False  # Set to True to mute recipients; only sender as TO (for test
 # WhatsApp (WHAPI) Configuration - same as reservations_email_automation.py
 # Dashboard: https://whapi.cloud/
 # WHAPI /body/to must match: ^[\d-]{9,31}(@[\w\.]{1,})?$  (e.g. 919500055366 or 120363xxx@g.us)
-def _sanitize_whatsapp_phone(phone):
-    """Sanitize phone for WHAPI: strip whitespace/newlines, remove +, take first if comma-separated."""
-    if not phone:
-        return '919500055366'
-    s = str(phone).strip().replace(' ', '').replace('\n', '').replace('\r', '').replace('+', '')
-    if ',' in s:
-        s = s.split(',')[0].strip()
-    if not s or len(s) < 9:
-        return '919500055366'
-    return s[:31] if len(s) > 31 else s  # WHAPI max 31 chars for number part
+def _get_whatsapp_recipients():
+    """Return list of WhatsApp recipients. WHATSAPP_PHONE can be comma-separated (e.g. number1,number2@g.us)."""
+    raw = os.getenv('WHATSAPP_PHONE', '919500055366')
+    if not raw or not str(raw).strip():
+        return ['919500055366']
+    parts = [p.strip().replace(' ', '').replace('\n', '').replace('\r', '').replace('+', '')
+             for p in str(raw).split(',') if p.strip()]
+    result = []
+    for s in parts:
+        if s and len(s) >= 9:
+            result.append(s[:31] if len(s) > 31 else s)
+    return result if result else ['919500055366']
 
 WHATSAPP_CONFIG = {
     'enabled': os.getenv('WHATSAPP_ENABLED', '1') == '1',  # Set WHATSAPP_ENABLED=0 to disable
     'token': os.getenv('WHAPI_TOKEN', 'AajpPuQixaM8bnjBLetBt2n23Z5XOCji'),
-    'recipient_phone': _sanitize_whatsapp_phone(os.getenv('WHATSAPP_PHONE', '919500055366')),
+    'recipient_phone': None,  # Deprecated - use _get_whatsapp_recipients()
     'api_url': 'https://gate.whapi.cloud/messages/image',
 }
 HTML_TO_IMAGE_SERVICE_URL = os.getenv('HTML_TO_IMAGE_SERVICE_URL', '')  # Optional cloud service
@@ -1477,11 +1479,7 @@ def send_whatsapp_image(html_content, caption=None):
     if caption is None:
         caption = f"South COD Monitor - {_now_ist().strftime('%d-%b-%Y %H:%M')}"
 
-    payload = {
-        "to": WHATSAPP_CONFIG['recipient_phone'],
-        "caption": caption,
-        "media": media_value
-    }
+    recipients = _get_whatsapp_recipients()
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -1495,33 +1493,41 @@ def send_whatsapp_image(html_content, caption=None):
     retry_delay = 10 if in_ci else 5
     if in_ci:
         print(f"   [i] GitHub Actions detected - using timeout={timeout_sec}s, {max_attempts} attempts")
-    last_err = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            print(f"   >> Sending image to WhatsApp ({WHATSAPP_CONFIG['recipient_phone']})... (attempt {attempt}/{max_attempts})")
-            resp = requests.post(
-                WHATSAPP_CONFIG['api_url'],
-                json=payload,
-                headers=headers,
-                timeout=timeout_sec
-            )
-            resp.raise_for_status()
-            print("   [OK] WhatsApp image sent successfully!")
-            return
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            is_timeout = isinstance(e, requests.exceptions.Timeout)
-            if attempt < max_attempts and is_timeout:
-                print(f"   [!] Timeout (attempt {attempt}) - retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
+
+    success_count = 0
+    for recipient in recipients:
+        payload = {"to": recipient, "caption": caption, "media": media_value}
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                print(f"   >> Sending image to WhatsApp ({recipient})... (attempt {attempt}/{max_attempts})")
+                resp = requests.post(
+                    WHATSAPP_CONFIG['api_url'],
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout_sec
+                )
+                resp.raise_for_status()
+                print(f"   [OK] WhatsApp image sent to {recipient}")
+                success_count += 1
                 break
-    print(f"   [X] WhatsApp send failed: {last_err}")
-    if last_err and hasattr(last_err, 'response') and last_err.response is not None:
-        try:
-            print(f"      Response: {last_err.response.text[:300]}")
-        except Exception:
-            pass
+            except requests.exceptions.RequestException as e:
+                last_err = e
+                is_timeout = isinstance(e, requests.exceptions.Timeout)
+                if attempt < max_attempts and is_timeout:
+                    print(f"   [!] Timeout (attempt {attempt}) - retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"   [X] WhatsApp send failed for {recipient}: {last_err}")
+                    if last_err and hasattr(last_err, 'response') and last_err.response is not None:
+                        try:
+                            print(f"      Response: {last_err.response.text[:300]}")
+                        except Exception:
+                            pass
+                    break
+
+    if success_count > 0:
+        print(f"   [OK] WhatsApp image sent to {success_count}/{len(recipients)} recipient(s)")
 
 
 def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False, whatsapp_mode=False):
@@ -1530,6 +1536,9 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
     today_date = _now_ist().strftime('%d-%b-%Y')
     time_str = _now_ist().strftime('%H:%M')
     trend_map = trend_map or {}
+    # Use Rs. instead of ₹ in WhatsApp image when run in CI - Chrome/Linux often lacks ₹ font
+    in_ci = os.getenv('CI') == 'true' or os.getenv('GITHUB_ACTIONS') == 'true'
+    currency_sym = 'Rs.' if (whatsapp_mode and in_ci) else '₹'
     
     # WhatsApp: compute compact widths, larger fonts, and scale up for bigger image
     whatsapp_css = ""
@@ -1848,9 +1857,9 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
                 
                 # Format the total (Rupee symbol only)
                 if total_value == int(total_value):
-                    formatted_value = f'₹{int(total_value):,}'
+                    formatted_value = f'{currency_sym}{int(total_value):,}'
                 else:
-                    formatted_value = f'₹{total_value:,.2f}'
+                    formatted_value = f'{currency_sym}{total_value:,.2f}'
                 html += f'                        <td style="text-align: right; font-weight: bold; background: #e3f2fd; font-size: 10px; padding: 6px 4px;">{formatted_value}</td>\n'
             else:
                 html += '                        <td style="text-align: right; font-weight: bold; background: #e3f2fd; font-size: 10px; padding: 6px 4px;">-</td>\n'
@@ -1899,9 +1908,9 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
                                 # Format as number with Rupee symbol only
                                 num_value = float(str(value).replace(',', '').replace('\u20b9', '').replace('Rs.', '').strip())
                                 if num_value == int(num_value):
-                                    formatted_value = f'₹{int(num_value):,}'
+                                    formatted_value = f'{currency_sym}{int(num_value):,}'
                                 else:
-                                    formatted_value = f'₹{num_value:,.2f}'
+                                    formatted_value = f'{currency_sym}{num_value:,.2f}'
                                 if col == CALCULATED_COLUMN:
                                     html += f'                        <td style="text-align: right; font-size: 10px; padding: 6px 4px;">{formatted_value}{get_trend_icon(trend)}</td>\n'
                                 else:
