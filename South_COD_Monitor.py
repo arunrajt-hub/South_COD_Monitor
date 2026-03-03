@@ -12,6 +12,15 @@ from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
+
+def _now_ist():
+    """Return current datetime in IST (for email/WhatsApp - GitHub Actions runs in UTC)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo('Asia/Kolkata'))
+    except Exception:
+        # Fallback: UTC + 5:30
+        return datetime.utcnow() + timedelta(hours=5, minutes=30)
 import os
 import sys
 import time
@@ -140,10 +149,22 @@ TEST_MODE = False  # Set to True to mute recipients; only sender as TO (for test
 
 # WhatsApp (WHAPI) Configuration - same as reservations_email_automation.py
 # Dashboard: https://whapi.cloud/
+# WHAPI /body/to must match: ^[\d-]{9,31}(@[\w\.]{1,})?$  (e.g. 919500055366 or 120363xxx@g.us)
+def _sanitize_whatsapp_phone(phone):
+    """Sanitize phone for WHAPI: strip whitespace/newlines, remove +, take first if comma-separated."""
+    if not phone:
+        return '919500055366'
+    s = str(phone).strip().replace(' ', '').replace('\n', '').replace('\r', '').replace('+', '')
+    if ',' in s:
+        s = s.split(',')[0].strip()
+    if not s or len(s) < 9:
+        return '919500055366'
+    return s[:31] if len(s) > 31 else s  # WHAPI max 31 chars for number part
+
 WHATSAPP_CONFIG = {
     'enabled': os.getenv('WHATSAPP_ENABLED', '1') == '1',  # Set WHATSAPP_ENABLED=0 to disable
     'token': os.getenv('WHAPI_TOKEN', 'AajpPuQixaM8bnjBLetBt2n23Z5XOCji'),
-    'recipient_phone': os.getenv('WHATSAPP_PHONE', '919500055366'),
+    'recipient_phone': _sanitize_whatsapp_phone(os.getenv('WHATSAPP_PHONE', '919500055366')),
     'api_url': 'https://gate.whapi.cloud/messages/image',
 }
 HTML_TO_IMAGE_SERVICE_URL = os.getenv('HTML_TO_IMAGE_SERVICE_URL', '')  # Optional cloud service
@@ -1454,7 +1475,7 @@ def send_whatsapp_image(html_content, caption=None):
 
     media_value = f"data:image/png;base64,{img_base64}"
     if caption is None:
-        caption = f"South COD Monitor - {datetime.now().strftime('%d-%b-%Y %H:%M')}"
+        caption = f"South COD Monitor - {_now_ist().strftime('%d-%b-%Y %H:%M')}"
 
     payload = {
         "to": WHATSAPP_CONFIG['recipient_phone'],
@@ -1506,8 +1527,8 @@ def send_whatsapp_image(html_content, caption=None):
 def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False, whatsapp_mode=False):
     """Create HTML email template with full table (same style as reservations_email_automation.py).
     whatsapp_mode=True: larger fonts, tighter column widths for WhatsApp image."""
-    today_date = datetime.now().strftime('%d-%b-%Y')
-    time_str = datetime.now().strftime('%H:%M')
+    today_date = _now_ist().strftime('%d-%b-%Y')
+    time_str = _now_ist().strftime('%H:%M')
     trend_map = trend_map or {}
     
     # WhatsApp: compute compact widths, larger fonts, and scale up for bigger image
@@ -1903,7 +1924,7 @@ def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mo
     html += """        </div>
         <div class="footer">
             <p>This is an automated email from the South COD Monitor system. Please do not reply.</p>
-            <p>Generated at: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>"""
+            <p>Generated at: """ + _now_ist().strftime('%Y-%m-%d %H:%M:%S') + """ (IST)</p>"""
     
     # Add test mode message only if test_mode is True
     if test_mode:
@@ -1950,8 +1971,8 @@ def send_email_with_summary(df_data, hub_column_name, spreadsheet_url, trend_map
             print(f"   >> CC: {len(actual_cc_list)} recipients")
             print(f"   >> BCC: {len(actual_bcc_list)} recipient(s)")
         
-        today_date = datetime.now().strftime('%d-%b')
-        current_time = datetime.now().strftime('%H:%M')
+        today_date = _now_ist().strftime('%d-%b')
+        current_time = _now_ist().strftime('%H:%M')
         
         # Create HTML email content with full table
         html_content = create_email_html_template(df_data, hub_column_name, trend_map=trend_map, test_mode=TEST_MODE)
