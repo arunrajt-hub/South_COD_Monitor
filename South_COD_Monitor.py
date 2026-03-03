@@ -1507,7 +1507,7 @@ def send_whatsapp_image(html_content, caption=None):
     success_count = 0
     for i, recipient in enumerate(recipients):
         if i > 0:
-            time.sleep(3)  # Brief delay between recipients (avoid WHAPI rate limit)
+            time.sleep(5)  # Delay between recipients (WHAPI/Cloudflare can be slow on first request)
         payload = {"to": recipient, "caption": caption, "media": media_value}
         last_err = None
         for attempt in range(1, max_attempts + 1):
@@ -1526,8 +1526,11 @@ def send_whatsapp_image(html_content, caption=None):
             except requests.exceptions.RequestException as e:
                 last_err = e
                 is_timeout = isinstance(e, requests.exceptions.Timeout)
-                if attempt < max_attempts and is_timeout:
-                    print(f"   [!] Timeout (attempt {attempt}) - retrying in {retry_delay}s...")
+                status = getattr(getattr(e, 'response', None), 'status_code', None)
+                # 524 = Cloudflare "origin timeout"; 502/503 = gateway errors - retry these
+                is_retryable = is_timeout or (status and status in (502, 503, 524))
+                if attempt < max_attempts and is_retryable:
+                    print(f"   [!] {last_err} (attempt {attempt}) - retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
                 else:
                     print(f"   [X] WhatsApp send failed for {recipient}: {last_err}")
