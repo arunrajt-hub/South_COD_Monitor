@@ -1466,23 +1466,41 @@ def send_whatsapp_image(html_content, caption=None):
         "Content-Type": "application/json"
     }
 
-    try:
-        print(f"   >> Sending image to WhatsApp ({WHATSAPP_CONFIG['recipient_phone']})...")
-        resp = requests.post(
-            WHATSAPP_CONFIG['api_url'],
-            json=payload,
-            headers=headers,
-            timeout=60
-        )
-        resp.raise_for_status()
-        print("   [OK] WhatsApp image sent successfully!")
-    except requests.exceptions.RequestException as e:
-        print(f"   [X] WhatsApp send failed: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                print(f"      Response: {e.response.text[:300]}")
-            except Exception:
-                pass
+    # South COD image is larger (2x scale, 28px fonts) than conversion_trend_analyzer's compact table.
+    # GitHub Actions runners have slower outbound connections to WHAPI - use longer timeout + more retries.
+    in_ci = os.getenv('CI') == 'true' or os.getenv('GITHUB_ACTIONS') == 'true'
+    timeout_sec = int(os.getenv('WHATSAPP_TIMEOUT', '180' if in_ci else '120'))
+    max_attempts = 3 if in_ci else 2
+    retry_delay = 10 if in_ci else 5
+    if in_ci:
+        print(f"   [i] GitHub Actions detected - using timeout={timeout_sec}s, {max_attempts} attempts")
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            print(f"   >> Sending image to WhatsApp ({WHATSAPP_CONFIG['recipient_phone']})... (attempt {attempt}/{max_attempts})")
+            resp = requests.post(
+                WHATSAPP_CONFIG['api_url'],
+                json=payload,
+                headers=headers,
+                timeout=timeout_sec
+            )
+            resp.raise_for_status()
+            print("   [OK] WhatsApp image sent successfully!")
+            return
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            is_timeout = isinstance(e, requests.exceptions.Timeout)
+            if attempt < max_attempts and is_timeout:
+                print(f"   [!] Timeout (attempt {attempt}) - retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                break
+    print(f"   [X] WhatsApp send failed: {last_err}")
+    if last_err and hasattr(last_err, 'response') and last_err.response is not None:
+        try:
+            print(f"      Response: {last_err.response.text[:300]}")
+        except Exception:
+            pass
 
 
 def create_email_html_template(df_data, hub_column_name, trend_map=None, test_mode=False, whatsapp_mode=False):
