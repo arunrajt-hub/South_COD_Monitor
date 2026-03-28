@@ -71,6 +71,7 @@ CLM_EMAIL = {
     "Haseem": "hasheem@loadshare.net",
     "Madvesh": "madvesh@loadshare.net",
     "Irappa": "irappa.vaggappanavar@loadshare.net",
+    "Singaram": "singaram@loadshare.net",
     "Bharath": "bharath.s@loadshare.net",
     "Lokesh": "lokeshh@loadshare.net"
 }
@@ -80,7 +81,7 @@ EMAIL_CONFIG = {
     'sender_email': os.getenv('GMAIL_SENDER_EMAIL', 'arunraj@loadshare.net'),
     'sender_password': os.getenv('GMAIL_APP_PASSWORD', 'ihczkvucdsayzrsu'),
     'recipient_email': 'arunraj@loadshare.net',
-    'cc_list': ['maligai.rasmeen@loadshare.net'],
+    'cc_list': ['saicharan@loadshare.net', 'rakshith.ar@loadshare.net'],
     'smtp_server': 'smtp.gmail.com',
     'smtp_port': 587
 }

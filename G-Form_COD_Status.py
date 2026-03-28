@@ -95,6 +95,7 @@ CLM_EMAIL = {
     "Haseem": "hasheem@loadshare.net",
     "Madvesh": "madvesh@loadshare.net",
     "Irappa": "irappa.vaggappanavar@loadshare.net",
+    "Singaram": "singaram@loadshare.net",
     "Lokesh": "lokeshh@loadshare.net",
     "Bharath": "bharath.s@loadshare.net"
 }
@@ -146,14 +147,15 @@ def get_email_recipients():
             if clm_name in CLM_EMAIL:
                 clm_emails.add(CLM_EMAIL[clm_name])
     
-    # Add Lokesh, Bharath, and Maligai Rasmeen to TO list
+    # Add Lokesh, Bharath, Sai Charan, and Rakshith to TO list
     additional_to = [
         CLM_EMAIL.get("Lokesh", "lokeshh@loadshare.net"),
         CLM_EMAIL.get("Bharath", "bharath.s@loadshare.net"),
-        "maligai.rasmeen@loadshare.net"
+        "saicharan@loadshare.net",
+        "rakshith.ar@loadshare.net",
     ]
     
-    # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen)
+    # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Sai Charan + Rakshith)
     to_recipients = list(set(hub_emails + list(clm_emails) + additional_to))
     
     # CC list: Empty
@@ -854,7 +856,8 @@ def send_email(html_content):
         logger.info(f"\n➕ Additional TO Recipients:")
         logger.info(f"   • Lokesh: {CLM_EMAIL.get('Lokesh', 'lokeshh@loadshare.net')}")
         logger.info(f"   • Bharath: {CLM_EMAIL.get('Bharath', 'bharath.s@loadshare.net')}")
-        logger.info(f"   • Maligai Rasmeen: maligai.rasmeen@loadshare.net")
+        logger.info(f"   • Sai Charan: saicharan@loadshare.net")
+        logger.info(f"   • Rakshith: rakshith.ar@loadshare.net")
         
         logger.info(f"\n{'='*60}")
         logger.info(f"📋 CC RECIPIENTS ({len(cc_recipients)} total):")

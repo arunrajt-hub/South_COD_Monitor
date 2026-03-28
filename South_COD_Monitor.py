@@ -113,16 +113,16 @@ def get_email_recipients():
             if clm_name in CLM_EMAIL:
                 clm_emails.add(CLM_EMAIL[clm_name])
     
-    # Add Lokesh, Bharath, Maligai Rasmeen, Singaram, and Sai Charan
+    # Add Lokesh, Bharath, Singaram, Sai Charan, and Rakshith
     additional_recipients = [
         CLM_EMAIL.get("Lokesh", "lokeshh@loadshare.net"),
         CLM_EMAIL.get("Bharath", "bharath.s@loadshare.net"),
-        "maligai.rasmeen@loadshare.net",
         "singaram@loadshare.net",
-        "saicharan@loadshare.net"
+        "saicharan@loadshare.net",
+        "rakshith.ar@loadshare.net",
     ]
     
-    # Combine all TO recipients (hubs + CLMs + Lokesh + Bharath + Maligai Rasmeen + sender)
+    # Combine all TO recipients (hubs + CLMs + additional recipients + sender)
     sender_email = EMAIL_CONFIG.get('sender_email')
     sender_list = [sender_email] if sender_email else []
     to_recipients = list(set(hub_emails + list(clm_emails) + additional_recipients + sender_list))
@@ -140,7 +140,7 @@ EMAIL_CONFIG = {
     'sender_email': os.getenv('GMAIL_SENDER_EMAIL', 'arunraj@loadshare.net'),
     'sender_password': os.getenv('GMAIL_APP_PASSWORD', 'ihczkvucdsayzrsu'),
     'recipient_email': 'arunraj@loadshare.net',  # Will be overridden by get_email_recipients()
-    'cc_list': ['maligai.rasmeen@loadshare.net'],  # Will be overridden by get_email_recipients()
+    'cc_list': ['saicharan@loadshare.net', 'rakshith.ar@loadshare.net'],  # Will be overridden by get_email_recipients()
     'smtp_server': 'smtp.gmail.com',
     'smtp_port': 587
 }
